@@ -23,7 +23,7 @@ pub struct AiConfig {
 }
 
 fn default_ai_model() -> String {
-    "gemini-1.5-flash".to_string()
+    "gemini-flash-latest".to_string()
 }
 
 #[derive(Debug, Deserialize)]

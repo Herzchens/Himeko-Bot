@@ -2,8 +2,8 @@ use serde_json::json;
 
 pub async fn ask_gemini(api_key: &str, model: &str, question: &str) -> anyhow::Result<String> {
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        model, api_key
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model
     );
 
     let payload = json!({
@@ -24,7 +24,13 @@ pub async fn ask_gemini(api_key: &str, model: &str, question: &str) -> anyhow::R
     });
 
     let client = reqwest::Client::new();
-    let res = client.post(&url).json(&payload).send().await?;
+    let res = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("x-goog-api-key", api_key)
+        .json(&payload)
+        .send()
+        .await?;
 
     if res.status() == 429 {
         return Ok("⏳ Bot đang bị quá tải (Rate limit từ Google Gemini). Vui lòng thử lại sau ít phút nhé!".to_string());
