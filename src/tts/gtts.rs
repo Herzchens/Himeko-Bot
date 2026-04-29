@@ -16,9 +16,6 @@ impl GttsEngine {
 #[async_trait::async_trait]
 impl TtsEngine for GttsEngine {
     async fn synthesize(&self, text: &str, _voice: &str) -> anyhow::Result<Vec<u8>> {
-        // Ghi chú: gTTS API không hỗ trợ chọn giọng nam/nữ, chỉ hỗ trợ ngôn ngữ.
-        // Tham số _voice sẽ bị bỏ qua.
-        
         let url = format!(
             "https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q={}",
             urlencoding::encode(text)

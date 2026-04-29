@@ -40,12 +40,10 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
                 Arc::new(MsEdgeEngine::new(new_config.tts.clone()))
             };
 
-            // Cập nhật dữ liệu toàn cục
             *ctx.data().config.write().await = new_config.clone();
             *ctx.data().normalizer.write().await = normalizer;
             *ctx.data().tts_engine.write().await = tts_engine;
 
-            // Đăng ký lại lệnh cho server hiện tại để áp dụng tức thì
             if let Some(guild_id) = ctx.guild_id() {
                 let commands = &ctx.framework().options().commands;
                 let _ = poise::builtins::register_in_guild(ctx.serenity_context(), commands, guild_id).await;

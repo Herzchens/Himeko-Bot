@@ -89,6 +89,11 @@ pub async fn handle_message(
         "TTS synthesized"
     );
 
+    if audio_bytes.is_empty() {
+        tracing::error!("TTS engine returned 0 bytes! (Check if the voice name is correct or if text is empty)");
+        return;
+    }
+
     if let Some(handler_lock) = manager.get(guild_id) {
         let input = songbird::input::Input::from(audio_bytes);
         let mut handler = handler_lock.lock().await;
