@@ -44,10 +44,8 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
             *ctx.data().normalizer.write().await = normalizer;
             *ctx.data().tts_engine.write().await = tts_engine;
 
-            if let Some(guild_id) = ctx.guild_id() {
-                let commands = &ctx.framework().options().commands;
-                let _ = poise::builtins::register_in_guild(ctx.serenity_context(), commands, guild_id).await;
-            }
+            let commands = &ctx.framework().options().commands;
+            let _ = poise::builtins::register_globally(ctx.serenity_context(), commands).await;
 
             tracing::info!("Config and commands reloaded by {}", ctx.author().name);
             

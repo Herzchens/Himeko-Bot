@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 
                 for guild in ctx.cache.guilds() {
-                    let _ = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild).await;
+                    let _ = poise::builtins::register_in_guild(ctx, &[], guild).await;
                 }
 
                 tracing::info!(
