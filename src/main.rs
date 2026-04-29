@@ -23,6 +23,7 @@ pub struct Data {
     pub state: BotState,
     pub normalizer: RwLock<Arc<Normalizer>>,
     pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
+    pub language_detector: lingua::LanguageDetector,
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -97,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
                     state,
                     normalizer: RwLock::new(normalizer),
                     tts_engine: RwLock::new(tts_engine),
+                    language_detector: lingua::LanguageDetectorBuilder::from_languages(&[lingua::Language::Vietnamese, lingua::Language::English]).build(),
                 })
             })
         })

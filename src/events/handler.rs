@@ -60,8 +60,8 @@ pub async fn handle_message(
         processed
     };
 
-    let lang_info = whatlang::detect(&text_to_speak);
-    let is_english = lang_info.map(|info| info.lang() == whatlang::Lang::Eng).unwrap_or(false);
+    let detected_lang = data.language_detector.detect_language_of(&text_to_speak);
+    let is_english = detected_lang == Some(lingua::Language::English);
 
     let voice = if is_english {
         if data.state.is_female(guild_id) {
