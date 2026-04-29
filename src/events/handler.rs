@@ -15,6 +15,51 @@ pub async fn handle_message(
         return;
     }
 
+    // Handle AI mentions (@bot <question>)
+    let current_user_id = ctx.cache.current_user().id;
+    if msg.mentions_user_id(current_user_id) {
+        let bot_mention_1 = format!("<@{}>", current_user_id);
+        let bot_mention_2 = format!("<@!{}>", current_user_id);
+        
+        if msg.content.contains(&bot_mention_1) || msg.content.contains(&bot_mention_2) {
+            let question = msg.content
+                .replace(&bot_mention_1, "")
+                .replace(&bot_mention_2, "")
+                .trim()
+                .to_string();
+                
+            if !question.is_empty() {
+                let config = data.config.read().await;
+                if config.ai.enabled && !config.ai.api_key.is_empty() {
+                    let api_key = config.ai.api_key.clone();
+                    let model = config.ai.model.clone();
+                    drop(config);
+                    
+                    let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
+                    
+                    match crate::ai::ask_gemini(&api_key, &model, &question).await {
+                        Ok(answer) => {
+                            if answer.len() > 2000 {
+                                let chunks = answer.chars().collect::<Vec<char>>();
+                                for chunk in chunks.chunks(1900) {
+                                    let s: String = chunk.iter().collect();
+                                    let _ = msg.reply(&ctx.http, s).await;
+                                }
+                            } else {
+                                let _ = msg.reply(&ctx.http, answer).await;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = msg.reply(&ctx.http, format!("❌ Lỗi AI: {}", e)).await;
+                            tracing::error!("AI mention error: {}", e);
+                        }
+                    }
+                    return; // Stop processing TTS for AI mentions
+                }
+            }
+        }
+    }
+
     let guild_id = match msg.guild_id {
         Some(id) => id,
         None => return,

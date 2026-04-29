@@ -8,6 +8,22 @@ pub struct Config {
     pub tts: TtsConfig,
     #[serde(default)]
     pub abbreviations: HashMap<String, String>,
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_ai_model")]
+    pub model: String,
+}
+
+fn default_ai_model() -> String {
+    "gemini-1.5-flash".to_string()
 }
 
 #[derive(Debug, Deserialize)]

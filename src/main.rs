@@ -5,6 +5,7 @@ mod permissions;
 mod state;
 mod text;
 mod tts;
+pub mod ai;
 
 use config::Config;
 use state::BotState;
@@ -75,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::ping::ping(),
                 commands::gender::gender(),
                 commands::reload::reload(),
+                commands::ask::ask(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
