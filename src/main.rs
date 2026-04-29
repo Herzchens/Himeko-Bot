@@ -25,6 +25,8 @@ pub struct Data {
     pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
 }
 
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -83,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 
                 for guild in ctx.cache.guilds() {
-                    let _ = poise::builtins::register_in_guild(ctx, &[], guild).await;
+                    let _ = poise::builtins::register_in_guild(ctx, &Vec::<poise::Command<Data, Error>>::new(), guild).await;
                 }
 
                 tracing::info!(
