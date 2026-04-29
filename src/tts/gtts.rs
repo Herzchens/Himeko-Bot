@@ -15,9 +15,11 @@ impl GttsEngine {
 
 #[async_trait::async_trait]
 impl TtsEngine for GttsEngine {
-    async fn synthesize(&self, text: &str, _voice: &str) -> anyhow::Result<Vec<u8>> {
+    async fn synthesize(&self, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
+        let tl = if voice.starts_with("en-") || voice == "en" { "en" } else { "vi" };
         let url = format!(
-            "https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q={}",
+            "https://translate.google.com/translate_tts?ie=UTF-8&tl={}&client=tw-ob&q={}",
+            tl,
             urlencoding::encode(text)
         );
 
