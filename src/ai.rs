@@ -52,6 +52,20 @@ pub async fn ask_gemini(
         .await?;
 
     if res.status() == 429 {
+        // Local fallback for custom answers if rate limited
+        let question_lower = question.to_lowercase();
+        for (q_group, a) in custom_answers {
+            let parts: Vec<&str> = q_group.split('?').collect();
+            for part in parts {
+                let p = part.trim().to_lowercase();
+                if !p.is_empty() && question_lower.contains(&p) {
+                    return Ok(a.clone());
+                }
+            }
+            if question_lower.contains(&q_group.to_lowercase()) {
+                return Ok(a.clone());
+            }
+        }
         return Ok("⏳ Bot đang bị quá tải (Rate limit từ Google Gemini). Vui lòng thử lại sau ít phút nhé!".to_string());
     }
 

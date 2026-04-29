@@ -14,7 +14,7 @@ permissions:
 
 tts:
   # Chọn engine: "gtts" hoặc "msedge"
-  provider: "gtts"
+  provider: "msedge"
 
   # Giọng nữ tiếng Việt của Edge TTS
   voice_female: "vi-VN-HoaiMyNeural"
@@ -77,3 +77,4 @@ ai:
   model: "gemini-flash-latest"
   custom_answers:
     "Ai tạo ra bạn? Bạn của ai? Chủ của bạn là ai? Ai viết ra bạn?": "Tôi là con của Herzchen!"
+    "Minh có béo không": "Béo chứ, béo vãi lồn"
