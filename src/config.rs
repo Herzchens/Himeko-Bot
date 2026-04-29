@@ -23,12 +23,24 @@ pub struct PermissionsConfig {
     pub allowed_users: Vec<u64>,
 }
 
+fn default_voice_en_female() -> String {
+    "en-US-JennyNeural".to_string()
+}
+
+fn default_voice_en_male() -> String {
+    "en-US-GuyNeural".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
     pub voice_female: String,
     pub voice_male: String,
+    #[serde(default = "default_voice_en_female")]
+    pub voice_en_female: String,
+    #[serde(default = "default_voice_en_male")]
+    pub voice_en_male: String,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]

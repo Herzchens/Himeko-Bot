@@ -60,10 +60,21 @@ pub async fn handle_message(
         processed
     };
 
-    let voice = if data.state.is_female(guild_id) {
-        &config.tts.voice_female
+    let lang_info = whatlang::detect(&text_to_speak);
+    let is_english = lang_info.map(|info| info.lang() == whatlang::Lang::Eng).unwrap_or(false);
+
+    let voice = if is_english {
+        if data.state.is_female(guild_id) {
+            &config.tts.voice_en_female
+        } else {
+            &config.tts.voice_en_male
+        }
     } else {
-        &config.tts.voice_male
+        if data.state.is_female(guild_id) {
+            &config.tts.voice_female
+        } else {
+            &config.tts.voice_male
+        }
     };
 
     let tts_engine = data.tts_engine.read().await;
