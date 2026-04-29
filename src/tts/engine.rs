@@ -1,4 +1,4 @@
-﻿use super::TtsEngine;
+use super::TtsEngine;
 use crate::config::TtsConfig;
 use msedge_tts::tts::client::connect_async;
 use msedge_tts::tts::SpeechConfig;
@@ -27,23 +27,41 @@ impl MsEdgeEngine {
 impl TtsEngine for MsEdgeEngine {
     async fn synthesize(&self, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
         let speech_config = self.build_speech_config(voice);
+        let mut attempts = 0;
+        let max_attempts = 3;
 
-        let mut client = connect_async()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to connect to Edge TTS: {}", e))?;
-
-        let audio = client
-            .synthesize(text, &speech_config)
-            .await
-            .map_err(|e| anyhow::anyhow!("TTS synthesis failed: {}", e))?;
-
-        tracing::debug!(
-            voice = %voice,
-            text_len = text.len(),
-            audio_len = audio.audio_bytes.len(),
-            "TTS synthesis complete"
-        );
-
-        Ok(audio.audio_bytes)
+        loop {
+            attempts += 1;
+            
+            match connect_async().await {
+                Ok(mut client) => {
+                    match client.synthesize(text, &speech_config).await {
+                        Ok(audio) => {
+                            tracing::debug!(
+                                voice = %voice,
+                                text_len = text.len(),
+                                audio_len = audio.audio_bytes.len(),
+                                "TTS synthesis complete"
+                            );
+                            return Ok(audio.audio_bytes);
+                        }
+                        Err(e) => {
+                            if attempts >= max_attempts {
+                                return Err(anyhow::anyhow!("TTS synthesis failed after {} attempts: {}", attempts, e));
+                            }
+                            tracing::warn!("TTS synthesis failed (attempt {}/{}): {}. Retrying in 500ms...", attempts, max_attempts, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    if attempts >= max_attempts {
+                        return Err(anyhow::anyhow!("failed to connect to Edge TTS after {} attempts: {}", attempts, e));
+                    }
+                    tracing::warn!("Failed to connect to Edge TTS (attempt {}/{}): {}. Retrying in 500ms...", attempts, max_attempts, e);
+                }
+            }
+            
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
     }
 }

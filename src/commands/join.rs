@@ -1,4 +1,4 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use crate::state::VoiceSession;
 use crate::Data;
 use poise::CreateReply;
@@ -6,6 +6,7 @@ use poise::CreateReply;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Gọi bot vào kênh thoại bạn đang tham gia
 #[poise::command(slash_command, guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     let config = &ctx.data().config;

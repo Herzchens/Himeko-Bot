@@ -1,4 +1,4 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use crate::Data;
 use poise::CreateReply;
 
@@ -13,6 +13,7 @@ pub enum GenderChoice {
     Female,
 }
 
+/// Đổi giọng đọc (Nam/Nữ)
 #[poise::command(slash_command, guild_only)]
 pub async fn gender(
     ctx: Context<'_>,

@@ -1,4 +1,5 @@
-﻿pub mod engine;
+pub mod engine;
+pub mod gtts;
 
 #[async_trait::async_trait]
 pub trait TtsEngine: Send + Sync {

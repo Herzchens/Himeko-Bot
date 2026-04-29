@@ -1,6 +1,5 @@
 mod commands;
 mod config;
-mod error;
 mod events;
 mod permissions;
 mod state;
@@ -12,6 +11,7 @@ use state::BotState;
 use std::sync::Arc;
 use text::normalizer::Normalizer;
 use tts::engine::MsEdgeEngine;
+use tts::gtts::GttsEngine;
 use tts::TtsEngine;
 
 use serenity::prelude::GatewayIntents;
@@ -52,7 +52,13 @@ async fn main() -> anyhow::Result<()> {
         "normalizer loaded"
     );
 
-    let tts_engine: Arc<dyn TtsEngine> = Arc::new(MsEdgeEngine::new(config.tts.clone()));
+    let tts_engine: Arc<dyn TtsEngine> = if config.tts.provider == "gtts" {
+        tracing::info!("using gTTS engine");
+        Arc::new(GttsEngine::new())
+    } else {
+        tracing::info!("using MsEdge engine");
+        Arc::new(MsEdgeEngine::new(config.tts.clone()))
+    };
 
     let config_clone = Arc::clone(&config);
     let framework = poise::Framework::builder()
