@@ -70,3 +70,8 @@ abbreviations:
   a: "anh"
   e: "em"
   # Bạn có thể thêm các từ viết tắt khác vào đây...
+
+ai:
+  enabled: true
+  api_key: "YOUR_GOOGLE_AI_STUDIO_API_KEY"
+  model: "gemini-flash-latest"

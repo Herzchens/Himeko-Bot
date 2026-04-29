@@ -20,6 +20,11 @@ pub async fn ask_gemini(api_key: &str, model: &str, question: &str) -> anyhow::R
                     { "text": question }
                 ]
             }
+        ],
+        "tools": [
+            {
+                "googleSearch": {}
+            }
         ]
     });
 
