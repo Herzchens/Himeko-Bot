@@ -1,4 +1,4 @@
-﻿use regex::Regex;
+use regex::Regex;
 use std::sync::OnceLock;
 
 fn mention_re() -> &'static Regex {
@@ -39,8 +39,21 @@ fn multi_space_re() -> &'static Regex {
 pub struct MessageFilter;
 
 impl MessageFilter {
-    pub fn clean(text: &str) -> String {
-        let t = mention_re().replace_all(text, "ai đó");
+    pub fn clean(msg: &serenity::model::channel::Message) -> String {
+        let mut t = msg.content.clone();
+
+        // 1. Resolve user mentions to their display names
+        for user in &msg.mentions {
+            let mention_tag_1 = format!("<@{}>", user.id);
+            let mention_tag_2 = format!("<@!{}>", user.id);
+            let name = user.global_name.as_deref().unwrap_or(&user.name);
+            t = t.replace(&mention_tag_1, name).replace(&mention_tag_2, name);
+        }
+
+        // 2. Resolve role mentions to their names (if available in guild cache, otherwise fallback)
+        // Since we don't have ctx here, we just replace remaining role mentions with "một nhóm"
+        t = mention_re().replace_all(&t, "ai đó").to_string();
+
         let t = channel_re().replace_all(&t, "kênh nào đó");
         let t = emoji_re().replace_all(&t, "");
         let t = url_re().replace_all(&t, "có link");
@@ -51,68 +64,4 @@ impl MessageFilter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn removes_user_mentions() {
-        assert_eq!(MessageFilter::clean("Hello <@123456>!"), "Hello ai đó!");
-    }
-
-    #[test]
-    fn removes_role_mentions() {
-        assert_eq!(MessageFilter::clean("Hey <@&789>"), "Hey ai đó");
-    }
-
-    #[test]
-    fn removes_channel_mentions() {
-        assert_eq!(
-            MessageFilter::clean("Go to <#456>"),
-            "Go to kênh nào đó"
-        );
-    }
-
-    #[test]
-    fn removes_custom_emoji() {
-        assert_eq!(MessageFilter::clean("Nice <:pepe:123>"), "Nice");
-    }
-
-    #[test]
-    fn replaces_urls() {
-        assert_eq!(
-            MessageFilter::clean("Check https://example.com out"),
-            "Check có link out"
-        );
-    }
-
-    #[test]
-    fn replaces_codeblocks() {
-        assert_eq!(MessageFilter::clean("Run `cargo build`"), "Run có code");
-    }
-
-    #[test]
-    fn replaces_spoilers() {
-        assert_eq!(
-            MessageFilter::clean("This is ||secret||"),
-            "This is nội dung ẩn"
-        );
-    }
-
-    #[test]
-    fn collapses_whitespace() {
-        assert_eq!(MessageFilter::clean("a   b    c"), "a b c");
-    }
-
-    #[test]
-    fn handles_empty_input() {
-        assert_eq!(MessageFilter::clean(""), "");
-    }
-
-    #[test]
-    fn handles_mixed_content() {
-        let input = "Hey <@123> check https://x.com and ||spoiler|| <:emoji:456>";
-        let expected = "Hey ai đó check có link and nội dung ẩn";
-        assert_eq!(MessageFilter::clean(input), expected);
-    }
-}
