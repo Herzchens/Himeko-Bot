@@ -1,0 +1,44 @@
+[package]
+name         = "tts-bot"
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.83"
+license      = "GPL-3.0"
+description  = "A personal Discord TTS bot for Vietnamese text-to-speech"
+
+[dependencies]
+# Discord
+serenity = { version = "0.12.5", default-features = false, features = [
+    "client", "gateway", "rustls_backend", "model", "cache", "voice",
+]}
+poise     = "0.6.2"
+songbird  = { version = "0.6", features = ["serenity", "rustls", "builtin-queue"] }
+symphonia = { version = "0.5.5", features = ["mp3"] }
+
+# TTS
+msedge-tts = "0.3"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Config
+serde = { version = "1", features = ["derive"] }
+toml  = "0.8"
+
+# Error handling
+thiserror = "2"
+anyhow    = "1"
+
+# Performance
+dashmap = "6"
+
+# Text processing
+regex = "1"
+
+# Logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
+async-trait = "0.1"
+serde_yaml = "0.9.34"
