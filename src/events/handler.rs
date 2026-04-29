@@ -60,8 +60,20 @@ pub async fn handle_message(
         processed
     };
 
-    let detected_lang = data.language_detector.detect_language_of(&text_to_speak);
-    let is_english = detected_lang == Some(lingua::Language::English);
+    let text_lower = text_to_speak.trim().to_lowercase();
+    let eng_exceptions = ["no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice"];
+    
+    let is_english = if eng_exceptions.contains(&text_lower.as_str()) {
+        true
+    } else {
+        let has_vn_chars = text_lower.chars().any(|c| "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ".contains(c));
+        if has_vn_chars {
+            false
+        } else {
+            let detected_lang = data.language_detector.detect_language_of(&text_to_speak);
+            detected_lang == Some(lingua::Language::English)
+        }
+    };
 
     let voice = if is_english {
         if data.state.is_female(guild_id) {
