@@ -81,6 +81,11 @@ async fn main() -> anyhow::Result<()> {
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                
+                for guild in ctx.cache.guilds() {
+                    let _ = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild).await;
+                }
+
                 tracing::info!(
                     commands = framework.options().commands.len(),
                     "slash commands registered globally"
