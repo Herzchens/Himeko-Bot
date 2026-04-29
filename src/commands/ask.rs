@@ -23,11 +23,12 @@ pub async fn ask(
 
     let api_key = config.ai.api_key.clone();
     let model = config.ai.model.clone();
+    let custom_answers = config.ai.custom_answers.clone();
     drop(config);
 
     ctx.defer().await?;
 
-    match crate::ai::ask_gemini(&api_key, &model, &question).await {
+    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
         Ok(answer) => {
             // Split answer if it's too long (Discord limits to 2000 chars)
             if answer.len() > 2000 {

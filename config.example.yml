@@ -64,7 +64,7 @@ abbreviations:
   nhìu: "nhiều"
   vcl: "vờ cờ lờ"
   đm: "đệ mờ"
-  cc: "cờ cờ"
+  cc: "con cặc"
   vl: "vờ lờ"
   v: "vậy"
   a: "anh"
@@ -75,3 +75,5 @@ ai:
   enabled: true
   api_key: "YOUR_GOOGLE_AI_STUDIO_API_KEY"
   model: "gemini-flash-latest"
+  custom_answers:
+    "Ai tạo ra bạn? Bạn của ai? Chủ của bạn là ai? Ai viết ra bạn?": "Tôi được lập trình và tạo ra bởi Herzchen!"

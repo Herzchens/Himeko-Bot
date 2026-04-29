@@ -20,6 +20,8 @@ pub struct AiConfig {
     pub api_key: String,
     #[serde(default = "default_ai_model")]
     pub model: String,
+    #[serde(default)]
+    pub custom_answers: HashMap<String, String>,
 }
 
 fn default_ai_model() -> String {

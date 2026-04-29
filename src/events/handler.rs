@@ -33,11 +33,12 @@ pub async fn handle_message(
                 if config.ai.enabled && !config.ai.api_key.is_empty() {
                     let api_key = config.ai.api_key.clone();
                     let model = config.ai.model.clone();
+                    let custom_answers = config.ai.custom_answers.clone();
                     drop(config);
                     
                     let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
                     
-                    match crate::ai::ask_gemini(&api_key, &model, &question).await {
+                    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
                         Ok(answer) => {
                             if answer.len() > 2000 {
                                 let chunks = answer.chars().collect::<Vec<char>>();
