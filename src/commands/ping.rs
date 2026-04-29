@@ -1,14 +1,15 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use crate::Data;
 use poise::CreateReply;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Kiểm tra độ trễ của bot
 #[poise::command(slash_command, guild_only)]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
-    let config = &ctx.data().config;
-    let level = UserLevel::of(ctx.author().id.get(), config);
+    let config = ctx.data().config.read().await;
+    let level = UserLevel::of(ctx.author().id.get(), &config);
 
     if !level.can_use_tts() {
         ctx.send(

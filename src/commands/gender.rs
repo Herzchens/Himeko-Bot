@@ -1,4 +1,4 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use crate::Data;
 use poise::CreateReply;
 
@@ -13,15 +13,16 @@ pub enum GenderChoice {
     Female,
 }
 
+/// Đổi giọng đọc (Nam/Nữ)
 #[poise::command(slash_command, guild_only)]
 pub async fn gender(
     ctx: Context<'_>,
     #[description = "Giọng đọc: male hoặc female"] voice: GenderChoice,
 ) -> Result<(), Error> {
-    let config = &ctx.data().config;
+    let config = ctx.data().config.read().await;
     let state = &ctx.data().state;
 
-    let level = UserLevel::of(ctx.author().id.get(), config);
+    let level = UserLevel::of(ctx.author().id.get(), &config);
     if !level.can_use_tts() {
         ctx.send(
             CreateReply::default()

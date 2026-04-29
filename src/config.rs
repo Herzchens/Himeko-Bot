@@ -25,6 +25,8 @@ pub struct PermissionsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
+    #[serde(default = "default_provider")]
+    pub provider: String,
     pub voice_female: String,
     pub voice_male: String,
     #[serde(default = "default_gender")]
@@ -41,6 +43,10 @@ pub struct TtsConfig {
 
 fn default_gender() -> String {
     "female".to_string()
+}
+
+fn default_provider() -> String {
+    "msedge".to_string()
 }
 
 

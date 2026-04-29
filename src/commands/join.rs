@@ -1,4 +1,4 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use crate::state::VoiceSession;
 use crate::Data;
 use poise::CreateReply;
@@ -6,13 +6,14 @@ use poise::CreateReply;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Gọi bot vào kênh thoại bạn đang tham gia
 #[poise::command(slash_command, guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
-    let config = &ctx.data().config;
+    let config = ctx.data().config.read().await;
     let state = &ctx.data().state;
 
     let user_id = ctx.author().id.get();
-    let level = UserLevel::of(user_id, config);
+    let level = UserLevel::of(user_id, &config);
 
     if !level.can_join() {
         ctx.send(
