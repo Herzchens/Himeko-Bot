@@ -19,10 +19,10 @@ pub async fn gender(
     ctx: Context<'_>,
     #[description = "Giọng đọc: male hoặc female"] voice: GenderChoice,
 ) -> Result<(), Error> {
-    let config = &ctx.data().config;
+    let config = ctx.data().config.read().await;
     let state = &ctx.data().state;
 
-    let level = UserLevel::of(ctx.author().id.get(), config);
+    let level = UserLevel::of(ctx.author().id.get(), &config);
     if !level.can_use_tts() {
         ctx.send(
             CreateReply::default()

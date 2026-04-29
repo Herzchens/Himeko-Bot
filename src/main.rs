@@ -13,23 +13,26 @@ use text::normalizer::Normalizer;
 use tts::engine::MsEdgeEngine;
 use tts::gtts::GttsEngine;
 use tts::TtsEngine;
+use tokio::sync::RwLock;
 
 use serenity::prelude::GatewayIntents;
 use songbird::SerenityInit;
 
 pub struct Data {
-    pub config: Arc<Config>,
+    pub config: RwLock<Arc<Config>>,
     pub state: BotState,
-    pub normalizer: Arc<Normalizer>,
-    pub tts_engine: Arc<dyn TtsEngine>,
+    pub normalizer: RwLock<Arc<Normalizer>>,
+    pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("tts_bot=info".parse()?),
+                .add_directive("tts_bot=debug".parse()?),
         )
         .init();
 
@@ -68,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::leave::leave(),
                 commands::ping::ping(),
                 commands::gender::gender(),
+                commands::reload::reload(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
@@ -82,10 +86,10 @@ async fn main() -> anyhow::Result<()> {
                     "slash commands registered globally"
                 );
                 Ok(Data {
-                    config: config_clone,
+                    config: RwLock::new(config_clone),
                     state,
-                    normalizer,
-                    tts_engine,
+                    normalizer: RwLock::new(normalizer),
+                    tts_engine: RwLock::new(tts_engine),
                 })
             })
         })

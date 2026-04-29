@@ -20,7 +20,10 @@ pub async fn handle_message(
         None => return,
     };
 
-    let user_level = UserLevel::of(msg.author.id.get(), &data.config);
+    let config = data.config.read().await;
+    let normalizer = data.normalizer.read().await;
+
+    let user_level = UserLevel::of(msg.author.id.get(), &config);
     if !user_level.can_use_tts() {
         return;
     }
@@ -41,13 +44,13 @@ pub async fn handle_message(
         return;
     }
 
-    let processed = text::prepare_for_tts(&msg.content, &data.normalizer);
+    let processed = text::prepare_for_tts(&msg.content, &normalizer);
     if processed.is_empty() {
         return;
     }
 
-    let text_to_speak = if data.config.tts.max_chars > 0 {
-        let limit = data.config.tts.max_chars;
+    let text_to_speak = if config.tts.max_chars > 0 {
+        let limit = config.tts.max_chars;
         if processed.len() > limit {
             processed[..limit].to_string()
         } else {
@@ -58,12 +61,13 @@ pub async fn handle_message(
     };
 
     let voice = if data.state.is_female(guild_id) {
-        &data.config.tts.voice_female
+        &config.tts.voice_female
     } else {
-        &data.config.tts.voice_male
+        &config.tts.voice_male
     };
 
-    let audio_bytes = match data.tts_engine.synthesize(&text_to_speak, voice).await {
+    let tts_engine = data.tts_engine.read().await;
+    let audio_bytes = match tts_engine.synthesize(&text_to_speak, voice).await {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(
