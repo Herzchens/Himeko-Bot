@@ -13,7 +13,12 @@ fn channel_re() -> &'static Regex {
 
 fn emoji_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"<a?:\w+:\d+>").expect("invalid emoji regex"))
+    R.get_or_init(|| Regex::new(r"<a?:(\w+):\d+>").expect("invalid emoji regex"))
+}
+
+fn raw_emoji_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r":(\w+):").expect("invalid raw emoji regex"))
 }
 
 fn url_re() -> &'static Regex {
@@ -55,7 +60,15 @@ impl MessageFilter {
         t = mention_re().replace_all(&t, "ai đó").to_string();
 
         let t = channel_re().replace_all(&t, "kênh nào đó");
-        let t = emoji_re().replace_all(&t, "");
+        
+        let t = emoji_re().replace_all(&t, |caps: &regex::Captures| {
+            format!(" {} ", caps[1].replace("_", " "))
+        }).to_string();
+
+        let t = raw_emoji_re().replace_all(&t, |caps: &regex::Captures| {
+            format!(" {} ", caps[1].replace("_", " "))
+        }).to_string();
+
         let t = url_re().replace_all(&t, "có link");
         let t = codeblock_re().replace_all(&t, "có code");
         let t = spoiler_re().replace_all(&t, "nội dung ẩn");
