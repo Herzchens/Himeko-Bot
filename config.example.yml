@@ -1,0 +1,69 @@
+bot:
+  # Token của bot (Lấy từ Discord Developer Portal)
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  
+  # Application ID của bot
+  application_id: 1234567890123456789
+
+permissions:
+  # ID tài khoản Discord của BẠN (vào Discord, chuột phải vào avatar của bạn -> Copy User ID)
+  owner_id: 111222333444555
+  
+  # Danh sách ID những người được phép xài bot (có thể để trống)
+  allowed_users: []
+
+tts:
+  # Giọng nữ tiếng Việt của Edge TTS
+  voice_female: "vi-VN-HoaiMyNeural"
+  
+  # Giọng nam tiếng Việt của Edge TTS
+  voice_male: "vi-VN-NamMinhNeural"
+
+  # Giọng mặc định khi bot khởi động: "female" hoặc "male"
+  default_gender: "female"
+
+  # Tốc độ đọc: 0 (bình thường), 20 (nhanh hơn 20%), -20 (chậm hơn 20%)
+  rate: 0
+
+  # Cao độ giọng: 0 (bình thường), đơn vị Hz
+  pitch: 0
+
+  # Giới hạn ký tự (0 = không giới hạn)
+  max_chars: 0
+
+  # Định dạng audio (Không nên đổi nếu không hiểu rõ)
+  audio_format: "audio-24khz-48kbitrate-mono-mp3"
+
+abbreviations:
+  # Từ viết tắt:
+  ko: "không"
+  kh: "không"
+  k: "không"
+  dc: "được"
+  đc: "được"
+  j: "gì"
+  vs: "với"
+  ms: "mới"
+  r: "rồi"
+  ròi: "rồi"
+  thoi: "thôi"
+  rứa: "thế"
+  z: "vậy"
+  zậy: "vậy"
+  cx: "cũng"
+  ntn: "như thế nào"
+  nnao: "như nào"
+  s: "sao"
+  sao: "sao"
+  sv: "sinh viên"
+  gth: "giải thích"
+  h: "giờ"
+  nhìu: "nhiều"
+  vcl: "vờ cờ lờ"
+  đm: "đệ mờ"
+  cc: "cờ cờ"
+  vl: "vờ lờ"
+  v: "vậy"
+  a: "anh"
+  e: "em"
+  # Bạn có thể thêm các từ viết tắt khác vào đây...
