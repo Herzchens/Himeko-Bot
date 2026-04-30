@@ -50,7 +50,6 @@ pub async fn makecustom(
             }
         }
 
-        // Kiểm tra bot một cách chắc chắn bằng HTTP request
         for user_id in channel_users {
             let mut is_bot = false;
             let mut found = false;
