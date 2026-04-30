@@ -20,6 +20,12 @@ pub struct AiConfig {
     pub api_key: String,
     #[serde(default = "default_ai_model")]
     pub model: String,
+    #[serde(default = "default_ai_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub groq_api_key: String,
+    #[serde(default = "default_groq_model")]
+    pub groq_model: String,
     #[serde(default)]
     pub custom_answers: HashMap<String, String>,
     #[serde(default = "default_true")]
@@ -28,6 +34,14 @@ pub struct AiConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_ai_provider() -> String {
+    "gemini".to_string()
+}
+
+fn default_groq_model() -> String {
+    "llama-3.3-70b-versatile".to_string()
 }
 
 fn default_ai_model() -> String {
