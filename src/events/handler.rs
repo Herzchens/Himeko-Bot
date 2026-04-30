@@ -90,7 +90,7 @@ pub async fn handle_message(
         return;
     }
 
-    let processed = text::prepare_for_tts(msg, &normalizer);
+    let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
     if processed.is_empty() {
         return;
     }
