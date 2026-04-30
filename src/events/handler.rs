@@ -154,6 +154,11 @@ pub async fn handle_message(
     let voice = select_voice(&config, is_english, is_female);
 
     let tts_engine = data.tts_engine.read().await;
+    
+    // Đảm bảo các tin nhắn được đọc theo thứ tự bằng cách lock theo guild trước khi gọi API
+    let queue_lock = data.state.get_queue_lock(guild_id);
+    let _guard = queue_lock.lock().await;
+
     let audio_bytes = match tts_engine.synthesize(&text_to_speak, voice).await {
         Ok(bytes) => bytes,
         Err(e) => {

@@ -1,4 +1,4 @@
-﻿use crate::permissions::UserLevel;
+use crate::permissions::UserLevel;
 use dashmap::DashMap;
 use serenity::model::id::{GuildId, UserId};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ pub struct VoiceSession {
 pub struct BotState {
     sessions: Arc<DashMap<GuildId, VoiceSession>>,
     gender: Arc<DashMap<GuildId, bool>>,
+    queue_locks: Arc<DashMap<GuildId, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl BotState {
@@ -38,5 +39,9 @@ impl BotState {
 
     pub fn set_gender(&self, guild_id: GuildId, female: bool) {
         self.gender.insert(guild_id, female);
+    }
+
+    pub fn get_queue_lock(&self, guild_id: GuildId) -> Arc<tokio::sync::Mutex<()>> {
+        self.queue_locks.entry(guild_id).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
     }
 }
