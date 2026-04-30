@@ -32,6 +32,22 @@ pub struct AiConfig {
     pub google_search: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProvider {
+    Gemini,
+    Groq,
+}
+
+impl AiConfig {
+    pub fn resolve(&self) -> (AiProvider, &str, &str) {
+        if self.provider.to_lowercase() == "groq" {
+            (AiProvider::Groq, &self.groq_api_key, &self.groq_model)
+        } else {
+            (AiProvider::Gemini, &self.api_key, &self.model)
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
