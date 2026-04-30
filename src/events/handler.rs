@@ -38,8 +38,19 @@ pub async fn handle_message(
                     
                     let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
                     
+                    tracing::info!(
+                        user = %msg.author.id,
+                        question = %question,
+                        "Processing AI request"
+                    );
+                    
                     match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
                         Ok(answer) => {
+                            tracing::info!(
+                                user = %msg.author.id,
+                                answer_len = answer.len(),
+                                "AI request successful"
+                            );
                             if answer.len() > 2000 {
                                 let chunks = answer.chars().collect::<Vec<char>>();
                                 for chunk in chunks.chunks(1900) {

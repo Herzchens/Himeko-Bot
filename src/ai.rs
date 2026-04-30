@@ -51,7 +51,10 @@ pub async fn ask_gemini(
         .send()
         .await?;
 
+    tracing::info!(status = %res.status(), "Received response from Gemini API");
+
     if res.status() == 429 {
+        tracing::warn!("Gemini API rate limited (429). Attempting local fallback for custom answers.");
 
         let question_lower = question.to_lowercase();
         for (q_group, a) in custom_answers {
@@ -59,6 +62,7 @@ pub async fn ask_gemini(
             for part in parts {
                 let p = part.trim().to_lowercase();
                 if !p.is_empty() && question_lower.contains(&p) {
+                    tracing::info!(match_part = %p, "Local fallback matched successfully");
                     return Ok(a.clone());
                 }
             }
@@ -66,6 +70,7 @@ pub async fn ask_gemini(
                 return Ok(a.clone());
             }
         }
+        tracing::warn!("No local fallback matched for rate limit. Returning rate limit message.");
         return Ok("⏳ Bot đang bị quá tải (Rate limit từ Google Gemini). Vui lòng thử lại sau ít phút nhé!".to_string());
     }
 
