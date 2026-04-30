@@ -34,6 +34,7 @@ pub async fn handle_message(
                     let api_key = config.ai.api_key.clone();
                     let model = config.ai.model.clone();
                     let custom_answers = config.ai.custom_answers.clone();
+                    let use_search = config.ai.google_search;
                     drop(config);
                     
                     let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
@@ -44,7 +45,7 @@ pub async fn handle_message(
                         "Processing AI request"
                     );
                     
-                    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
+                    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers, use_search).await {
                         Ok(answer) => {
                             tracing::info!(
                                 user = %msg.author.id,

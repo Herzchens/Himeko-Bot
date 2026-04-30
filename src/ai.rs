@@ -5,6 +5,7 @@ pub async fn ask_gemini(
     model: &str,
     question: &str,
     custom_answers: &std::collections::HashMap<String, String>,
+    use_search: bool,
 ) -> anyhow::Result<String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
@@ -34,13 +35,14 @@ pub async fn ask_gemini(
                     { "text": question }
                 ]
             }
-        ],
-        "tools": [
-            {
-                "googleSearch": {}
-            }
         ]
     });
+
+    let mut payload_obj = payload.as_object().unwrap().clone();
+    if use_search {
+        payload_obj.insert("tools".to_string(), json!([{"googleSearch": {}}]));
+    }
+    let payload = json!(payload_obj);
 
     let client = reqwest::Client::new();
     let res = client

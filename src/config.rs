@@ -22,6 +22,12 @@ pub struct AiConfig {
     pub model: String,
     #[serde(default)]
     pub custom_answers: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub google_search: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_ai_model() -> String {

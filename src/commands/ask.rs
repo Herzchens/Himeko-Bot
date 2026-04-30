@@ -24,11 +24,12 @@ pub async fn ask(
     let api_key = config.ai.api_key.clone();
     let model = config.ai.model.clone();
     let custom_answers = config.ai.custom_answers.clone();
+    let use_search = config.ai.google_search;
     drop(config);
 
     ctx.defer().await?;
 
-    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
+    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers, use_search).await {
         Ok(answer) => {
 
             if answer.len() > 2000 {
