@@ -8,6 +8,24 @@ pub struct Config {
     pub tts: TtsConfig,
     #[serde(default)]
     pub abbreviations: HashMap<String, String>,
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_ai_model")]
+    pub model: String,
+    #[serde(default)]
+    pub custom_answers: HashMap<String, String>,
+}
+
+fn default_ai_model() -> String {
+    "gemini-flash-latest".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,12 +41,24 @@ pub struct PermissionsConfig {
     pub allowed_users: Vec<u64>,
 }
 
+fn default_voice_en_female() -> String {
+    "en-US-JennyNeural".to_string()
+}
+
+fn default_voice_en_male() -> String {
+    "en-US-GuyNeural".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
     pub voice_female: String,
     pub voice_male: String,
+    #[serde(default = "default_voice_en_female")]
+    pub voice_en_female: String,
+    #[serde(default = "default_voice_en_male")]
+    pub voice_en_male: String,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]

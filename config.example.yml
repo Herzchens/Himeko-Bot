@@ -14,7 +14,7 @@ permissions:
 
 tts:
   # Chọn engine: "gtts" hoặc "msedge"
-  provider: "gtts"
+  provider: "msedge"
 
   # Giọng nữ tiếng Việt của Edge TTS
   voice_female: "vi-VN-HoaiMyNeural"
@@ -64,9 +64,17 @@ abbreviations:
   nhìu: "nhiều"
   vcl: "vờ cờ lờ"
   đm: "đệ mờ"
-  cc: "cờ cờ"
+  cc: "con cặc"
   vl: "vờ lờ"
   v: "vậy"
   a: "anh"
   e: "em"
   # Bạn có thể thêm các từ viết tắt khác vào đây...
+
+ai:
+  enabled: true
+  api_key: "YOUR_GOOGLE_AI_STUDIO_API_KEY"
+  model: "gemini-flash-latest"
+  custom_answers:
+    "Ai tạo ra bạn? Bạn của ai? Chủ của bạn là ai? Ai viết ra bạn?": "Tôi là con của Herzchen!"
+    "Minh có béo không": "Béo chứ, béo vãi lồn"
