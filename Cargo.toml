@@ -4,7 +4,7 @@ version      = "0.1.0"
 edition      = "2021"
 rust-version = "1.83"
 license      = "GPL-3.0"
-description  = "A personal Discord TTS bot for Vietnamese text-to-speech"
+description  = "A personal Discord TTS bot for Vietnamese text-to-speech - Himeko Bot"
 
 [dependencies]
 # Discord
