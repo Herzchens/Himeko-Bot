@@ -36,25 +36,38 @@ pub async fn makecustom(
     let mut players: HashSet<UserId> = HashSet::new();
 
     if use_vc {
+        let mut channel_users = Vec::new();
         if let Some(guild) = ctx.guild() {
             let author_id = ctx.author().id;
             if let Some(voice_state) = guild.voice_states.get(&author_id) {
                 if let Some(channel_id) = voice_state.channel_id {
                     for (user_id, vs) in guild.voice_states.iter() {
                         if vs.channel_id == Some(channel_id) {
-                            if let Some(member) = &vs.member {
-                                if member.user.bot {
-                                    continue;
-                                }
-                            }
-                            // Fallback to checking against our bot id if member is somehow None
-                            let current_user_id = ctx.cache().current_user().id;
-                            if *user_id != current_user_id {
-                                players.insert(*user_id);
-                            }
+                            channel_users.push(*user_id);
                         }
                     }
                 }
+            }
+        }
+
+        // Now check if they are bots (must do outside the guild lock to allow await)
+        for user_id in channel_users {
+            let mut is_bot = false;
+            let mut found = false;
+            
+            if let Some(user) = ctx.cache().user(user_id) {
+                is_bot = user.bot;
+                found = true;
+            }
+            
+            if !found {
+                if let Ok(user) = user_id.to_user(ctx.http()).await {
+                    is_bot = user.bot;
+                }
+            }
+
+            if !is_bot {
+                players.insert(user_id);
             }
         }
     }
