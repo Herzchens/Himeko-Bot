@@ -44,15 +44,25 @@ fn multi_space_re() -> &'static Regex {
 pub struct MessageFilter;
 
 impl MessageFilter {
-    pub fn clean(msg: &serenity::model::channel::Message) -> String {
+    pub async fn clean(ctx: &serenity::client::Context, msg: &serenity::model::channel::Message) -> String {
         let mut t = msg.content.clone();
 
 
         for user in &msg.mentions {
             let mention_tag_1 = format!("<@{}>", user.id);
             let mention_tag_2 = format!("<@!{}>", user.id);
-            let name = user.global_name.as_deref().unwrap_or(&user.name);
-            t = t.replace(&mention_tag_1, name).replace(&mention_tag_2, name);
+            
+            let mut name_to_read = user.global_name.as_deref().unwrap_or(&user.name).to_string();
+            
+            if let Some(guild_id) = msg.guild_id {
+                if let Ok(member) = guild_id.member(ctx, user.id).await {
+                    if let Some(nick) = member.nick {
+                        name_to_read = nick;
+                    }
+                }
+            }
+            
+            t = t.replace(&mention_tag_1, &name_to_read).replace(&mention_tag_2, &name_to_read);
         }
 
 

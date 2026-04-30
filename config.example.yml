@@ -73,8 +73,12 @@ abbreviations:
 
 ai:
   enabled: true
+  provider: "gemini" # hoặc "groq"
   api_key: "YOUR_GOOGLE_AI_STUDIO_API_KEY"
   model: "gemini-flash-latest"
+  google_search: true
+  groq_api_key: "YOUR_GROQ_API_KEY"
+  groq_model: "llama-3.3-70b-versatile"
   custom_answers:
     "Ai tạo ra bạn? Bạn của ai? Chủ của bạn là ai? Ai viết ra bạn?": "Tôi là con của Herzchen!"
     "Minh có béo không": "Béo chứ, béo vãi lồn"

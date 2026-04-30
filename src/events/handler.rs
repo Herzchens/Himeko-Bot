@@ -30,16 +30,40 @@ pub async fn handle_message(
                 
             if !question.is_empty() {
                 let config = data.config.read().await;
-                if config.ai.enabled && !config.ai.api_key.is_empty() {
-                    let api_key = config.ai.api_key.clone();
-                    let model = config.ai.model.clone();
+                if config.ai.enabled {
+                    let provider = config.ai.provider.clone().to_lowercase();
+                    let api_key = if provider == "groq" { config.ai.groq_api_key.clone() } else { config.ai.api_key.clone() };
+                    let model = if provider == "groq" { config.ai.groq_model.clone() } else { config.ai.model.clone() };
                     let custom_answers = config.ai.custom_answers.clone();
+                    let use_search = config.ai.google_search;
                     drop(config);
+                    
+                    if api_key.is_empty() {
+                        let _ = msg.reply(&ctx.http, format!("❌ API Key cho provider '{}' chưa được cấu hình.", provider)).await;
+                        return;
+                    }
                     
                     let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
                     
-                    match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
+                    tracing::info!(
+                        user = %msg.author.id,
+                        question = %question,
+                        "Processing AI request"
+                    );
+                    
+                    let ai_result = if provider == "groq" {
+                        crate::ai::ask_groq(&api_key, &model, &question, &custom_answers).await
+                    } else {
+                        crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers, use_search).await
+                    };
+                    
+                    match ai_result {
                         Ok(answer) => {
+                            tracing::info!(
+                                user = %msg.author.id,
+                                answer_len = answer.len(),
+                                "AI request successful"
+                            );
                             if answer.len() > 2000 {
                                 let chunks = answer.chars().collect::<Vec<char>>();
                                 for chunk in chunks.chunks(1900) {
@@ -90,7 +114,7 @@ pub async fn handle_message(
         return;
     }
 
-    let processed = text::prepare_for_tts(msg, &normalizer);
+    let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
     if processed.is_empty() {
         return;
     }
