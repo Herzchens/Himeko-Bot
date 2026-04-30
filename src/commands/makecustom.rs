@@ -42,6 +42,12 @@ pub async fn makecustom(
                 if let Some(channel_id) = voice_state.channel_id {
                     for (user_id, vs) in guild.voice_states.iter() {
                         if vs.channel_id == Some(channel_id) {
+                            if let Some(member) = &vs.member {
+                                if member.user.bot {
+                                    continue;
+                                }
+                            }
+                            // Fallback to checking against our bot id if member is somehow None
                             let current_user_id = ctx.cache().current_user().id;
                             if *user_id != current_user_id {
                                 players.insert(*user_id);
