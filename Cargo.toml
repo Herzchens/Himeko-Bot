@@ -1,5 +1,5 @@
 [package]
-name         = "tts-bot"
+name         = "himeko-bot"
 version      = "0.1.0"
 edition      = "2021"
 rust-version = "1.83"
