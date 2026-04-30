@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 
 pub struct Normalizer {
     map: HashMap<String, String>,
@@ -16,6 +16,11 @@ impl Normalizer {
     pub fn expand(&self, text: &str) -> String {
         text.split_whitespace()
             .map(|word| {
+                let lower_full = word.to_lowercase();
+                if let Some(expanded) = self.map.get(&lower_full) {
+                    return expanded.clone();
+                }
+
                 let (prefix, core, suffix) = split_punctuation(word);
                 let lower = core.to_lowercase();
                 if let Some(expanded) = self.map.get(&lower) {
