@@ -52,7 +52,7 @@ pub async fn ask_gemini(
         .await?;
 
     if res.status() == 429 {
-        // Local fallback for custom answers if rate limited
+
         let question_lower = question.to_lowercase();
         for (q_group, a) in custom_answers {
             let parts: Vec<&str> = q_group.split('?').collect();

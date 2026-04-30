@@ -30,7 +30,7 @@ pub async fn ask(
 
     match crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers).await {
         Ok(answer) => {
-            // Split answer if it's too long (Discord limits to 2000 chars)
+
             if answer.len() > 2000 {
                 let chunks = answer.chars().collect::<Vec<char>>();
                 for chunk in chunks.chunks(1900) {

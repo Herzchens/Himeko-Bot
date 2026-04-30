@@ -15,7 +15,7 @@ pub async fn handle_message(
         return;
     }
 
-    // Handle AI mentions (@bot <question>)
+
     let current_user_id = ctx.cache.current_user().id;
     if msg.mentions_user_id(current_user_id) {
         let bot_mention_1 = format!("<@{}>", current_user_id);
@@ -55,7 +55,7 @@ pub async fn handle_message(
                             tracing::error!("AI mention error: {}", e);
                         }
                     }
-                    return; // Stop processing TTS for AI mentions
+                    return;
                 }
             }
         }

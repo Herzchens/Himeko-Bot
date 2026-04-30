@@ -47,7 +47,7 @@ impl MessageFilter {
     pub fn clean(msg: &serenity::model::channel::Message) -> String {
         let mut t = msg.content.clone();
 
-        // 1. Resolve user mentions to their display names
+
         for user in &msg.mentions {
             let mention_tag_1 = format!("<@{}>", user.id);
             let mention_tag_2 = format!("<@!{}>", user.id);
@@ -55,8 +55,7 @@ impl MessageFilter {
             t = t.replace(&mention_tag_1, name).replace(&mention_tag_2, name);
         }
 
-        // 2. Resolve role mentions to their names (if available in guild cache, otherwise fallback)
-        // Since we don't have ctx here, we just replace remaining role mentions with "một nhóm"
+
         t = mention_re().replace_all(&t, "ai đó").to_string();
 
         let t = channel_re().replace_all(&t, "kênh nào đó");
