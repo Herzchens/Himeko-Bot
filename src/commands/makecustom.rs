@@ -8,7 +8,7 @@ use serenity::all::UserId;
 
 fn mention_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"<@!?(\d+)>").unwrap())
+    RE.get_or_init(|| Regex::new(r"<@!?(\d+)>").expect("invalid mention regex"))
 }
 
 fn extract_mentions(text: &str) -> Vec<UserId> {
@@ -88,14 +88,15 @@ pub async fn makecustom(
     }
 
     if players.len() == 1 {
-        let only_player = players.iter().next().unwrap();
-        let config = ctx.data().config.read().await;
-        let owner_id = config.permissions.owner_id;
-        
-        if only_player.get() == owner_id {
-            ctx.say("Kiếm thêm ai đi mẹ ơi  😢").await?;
-        } else {
-            ctx.say("Tự kỷ à mà chơi một mình =))").await?;
+        if let Some(only_player) = players.iter().next() {
+            let config = ctx.data().config.read().await;
+            let owner_id = config.permissions.owner_id;
+            
+            if only_player.get() == owner_id {
+                ctx.say("Kiếm thêm ai đi mẹ ơi  😢").await?;
+            } else {
+                ctx.say("Tự kỷ à mà chơi một mình =))").await?;
+            }
         }
         return Ok(());
     }
@@ -115,7 +116,7 @@ pub async fn makecustom(
         "Abyss", "Lotus", "Sunset", "Breeze", "Icebox", "Fracture", 
         "Pearl", "Ascent", "Haven", "Bind", "Split"
     ];
-    let map = maps.choose(&mut rng()).unwrap();
+    let map = maps.choose(&mut rng()).expect("maps must not be empty");
 
     let mut response = format!("**VALORANT CUSTOM MATCH** \n **Map**: {}\n\n **Phe Tấn Công (Attackers)**:\n", map);
     for player in team_a {

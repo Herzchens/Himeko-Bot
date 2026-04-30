@@ -3,86 +3,115 @@ use crate::text;
 use crate::Data;
 use serenity::all::FullEvent;
 
+async fn handle_ai_mention(
+    ctx: &serenity::client::Context,
+    msg: &serenity::model::channel::Message,
+    data: &Data,
+) -> bool {
+    let current_user_id = ctx.cache.current_user().id;
+    if !msg.mentions_user_id(current_user_id) {
+        return false;
+    }
+
+    let bot_mention_1 = format!("<@{}>", current_user_id);
+    let bot_mention_2 = format!("<@!{}>", current_user_id);
+    
+    if !msg.content.contains(&bot_mention_1) && !msg.content.contains(&bot_mention_2) {
+        return false;
+    }
+
+    let question = msg.content
+        .replace(&bot_mention_1, "")
+        .replace(&bot_mention_2, "")
+        .trim()
+        .to_string();
+        
+    if question.is_empty() {
+        return false;
+    }
+
+    let config = data.config.read().await;
+    if !config.ai.enabled {
+        return false;
+    }
+
+    let (provider, api_key, model) = config.ai.resolve();
+    let api_key = api_key.to_string();
+    let model = model.to_string();
+    let custom_answers = config.ai.custom_answers.clone();
+    let use_search = config.ai.google_search;
+    drop(config);
+    
+    if api_key.is_empty() {
+        let _ = msg.reply(&ctx.http, format!("❌ API Key cho provider '{:?}' chưa được cấu hình.", provider)).await;
+        return true;
+    }
+    
+    let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
+    
+    tracing::info!(user = %msg.author.id, question = %question, "Processing AI request");
+    
+    let ai_result = crate::ai::ask_ai(provider, &api_key, &model, &question, &custom_answers, use_search).await;
+    
+    match ai_result {
+        Ok(answer) => {
+            tracing::info!(user = %msg.author.id, answer_len = answer.len(), "AI request successful");
+            if answer.len() > 2000 {
+                let chunks = answer.chars().collect::<Vec<char>>();
+                for chunk in chunks.chunks(1900) {
+                    let s: String = chunk.iter().collect();
+                    let _ = msg.reply(&ctx.http, s).await;
+                }
+            } else {
+                let _ = msg.reply(&ctx.http, answer).await;
+            }
+        }
+        Err(e) => {
+            let _ = msg.reply(&ctx.http, format!("❌ Lỗi AI: {}", e)).await;
+            tracing::error!("AI mention error: {}", e);
+        }
+    }
+    true
+}
+
+fn detect_language(text: &str, text_to_speak: &str, detector: &lingua::LanguageDetector) -> bool {
+    let eng_exceptions = ["no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice"];
+    if eng_exceptions.contains(&text) {
+        return true;
+    }
+    let has_vn_chars = text.chars().any(|c| "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ".contains(c));
+    if has_vn_chars {
+        return false;
+    }
+    let detected_lang = detector.detect_language_of(text_to_speak);
+    detected_lang == Some(lingua::Language::English)
+}
+
+fn select_voice(
+    config: &crate::config::Config,
+    is_english: bool,
+    is_female: bool,
+) -> &str {
+    if is_english {
+        if is_female { &config.tts.voice_en_female } else { &config.tts.voice_en_male }
+    } else if is_female {
+        &config.tts.voice_female
+    } else {
+        &config.tts.voice_male
+    }
+}
+
 pub async fn handle_message(
     ctx: &serenity::client::Context,
     msg: &serenity::model::channel::Message,
     data: &Data,
 ) {
-    if msg.author.bot {
-        return;
-    }
-    if msg.content.starts_with('/') {
+    if msg.author.bot || msg.content.starts_with('/') {
         return;
     }
 
-
-    let current_user_id = ctx.cache.current_user().id;
-    if msg.mentions_user_id(current_user_id) {
-        let bot_mention_1 = format!("<@{}>", current_user_id);
-        let bot_mention_2 = format!("<@!{}>", current_user_id);
-        
-        if msg.content.contains(&bot_mention_1) || msg.content.contains(&bot_mention_2) {
-            let question = msg.content
-                .replace(&bot_mention_1, "")
-                .replace(&bot_mention_2, "")
-                .trim()
-                .to_string();
-                
-            if !question.is_empty() {
-                let config = data.config.read().await;
-                if config.ai.enabled {
-                    let provider = config.ai.provider.clone().to_lowercase();
-                    let api_key = if provider == "groq" { config.ai.groq_api_key.clone() } else { config.ai.api_key.clone() };
-                    let model = if provider == "groq" { config.ai.groq_model.clone() } else { config.ai.model.clone() };
-                    let custom_answers = config.ai.custom_answers.clone();
-                    let use_search = config.ai.google_search;
-                    drop(config);
-                    
-                    if api_key.is_empty() {
-                        let _ = msg.reply(&ctx.http, format!("❌ API Key cho provider '{}' chưa được cấu hình.", provider)).await;
-                        return;
-                    }
-                    
-                    let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
-                    
-                    tracing::info!(
-                        user = %msg.author.id,
-                        question = %question,
-                        "Processing AI request"
-                    );
-                    
-                    let ai_result = if provider == "groq" {
-                        crate::ai::ask_groq(&api_key, &model, &question, &custom_answers).await
-                    } else {
-                        crate::ai::ask_gemini(&api_key, &model, &question, &custom_answers, use_search).await
-                    };
-                    
-                    match ai_result {
-                        Ok(answer) => {
-                            tracing::info!(
-                                user = %msg.author.id,
-                                answer_len = answer.len(),
-                                "AI request successful"
-                            );
-                            if answer.len() > 2000 {
-                                let chunks = answer.chars().collect::<Vec<char>>();
-                                for chunk in chunks.chunks(1900) {
-                                    let s: String = chunk.iter().collect();
-                                    let _ = msg.reply(&ctx.http, s).await;
-                                }
-                            } else {
-                                let _ = msg.reply(&ctx.http, answer).await;
-                            }
-                        }
-                        Err(e) => {
-                            let _ = msg.reply(&ctx.http, format!("❌ Lỗi AI: {}", e)).await;
-                            tracing::error!("AI mention error: {}", e);
-                        }
-                    }
-                    return;
-                }
-            }
-        }
+    if handle_ai_mention(ctx, msg, data).await {
+        return;
     }
 
     let guild_id = match msg.guild_id {
@@ -91,14 +120,8 @@ pub async fn handle_message(
     };
 
     let config = data.config.read().await;
-    let normalizer = data.normalizer.read().await;
-
     let user_level = UserLevel::of(msg.author.id.get(), &config);
-    if !user_level.can_use_tts() {
-        return;
-    }
-
-    if data.state.is_idle(guild_id) {
+    if !user_level.can_use_tts() || data.state.is_idle(guild_id) {
         return;
     }
 
@@ -114,73 +137,32 @@ pub async fn handle_message(
         return;
     }
 
+    let normalizer = data.normalizer.read().await;
     let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
     if processed.is_empty() {
         return;
     }
 
-    let text_to_speak = if config.tts.max_chars > 0 {
-        let limit = config.tts.max_chars;
-        if processed.len() > limit {
-            processed[..limit].to_string()
-        } else {
-            processed
-        }
+    let text_to_speak = if config.tts.max_chars > 0 && processed.len() > config.tts.max_chars {
+        processed[..config.tts.max_chars].to_string()
     } else {
         processed
     };
 
-    let text_lower = text_to_speak.trim().to_lowercase();
-    let eng_exceptions = ["no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice"];
-    
-    let is_english = if eng_exceptions.contains(&text_lower.as_str()) {
-        true
-    } else {
-        let has_vn_chars = text_lower.chars().any(|c| "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ".contains(c));
-        if has_vn_chars {
-            false
-        } else {
-            let detected_lang = data.language_detector.detect_language_of(&text_to_speak);
-            detected_lang == Some(lingua::Language::English)
-        }
-    };
-
-    let voice = if is_english {
-        if data.state.is_female(guild_id) {
-            &config.tts.voice_en_female
-        } else {
-            &config.tts.voice_en_male
-        }
-    } else {
-        if data.state.is_female(guild_id) {
-            &config.tts.voice_female
-        } else {
-            &config.tts.voice_male
-        }
-    };
+    let is_english = detect_language(&text_to_speak.trim().to_lowercase(), &text_to_speak, &data.language_detector);
+    let is_female = data.state.is_female(guild_id);
+    let voice = select_voice(&config, is_english, is_female);
 
     let tts_engine = data.tts_engine.read().await;
     let audio_bytes = match tts_engine.synthesize(&text_to_speak, voice).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::warn!(
-                guild = %guild_id,
-                user = %msg.author.id,
-                error = %e,
-                "TTS synthesis failed"
-            );
+            tracing::warn!(guild = %guild_id, user = %msg.author.id, error = %e, "TTS synthesis failed");
             return;
         }
     };
 
-    tracing::info!(
-        guild = %guild_id,
-        user = %msg.author.id,
-        chars = text_to_speak.len(),
-        voice = %voice,
-        audio_bytes = audio_bytes.len(),
-        "TTS synthesized"
-    );
+    tracing::info!(guild = %guild_id, user = %msg.author.id, chars = text_to_speak.len(), voice = %voice, audio_bytes = audio_bytes.len(), "TTS synthesized");
 
     if audio_bytes.is_empty() {
         tracing::error!("TTS engine returned 0 bytes! (Check if the voice name is correct or if text is empty)");

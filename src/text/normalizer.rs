@@ -18,7 +18,12 @@ impl Normalizer {
             .map(|word| {
                 let lower_full = word.to_lowercase();
                 if let Some(expanded) = self.map.get(&lower_full) {
-                    return expanded.clone();
+                    let result = if word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        capitalize(expanded)
+                    } else {
+                        expanded.clone()
+                    };
+                    return result;
                 }
 
                 let (prefix, core, suffix) = split_punctuation(word);

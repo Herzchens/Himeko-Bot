@@ -1,4 +1,4 @@
-﻿use crate::config::Config;
+use crate::config::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UserLevel {
@@ -48,8 +48,11 @@ mod tests {
                 allowed_users: vec![200, 300],
             },
             tts: TtsConfig {
+                provider: "msedge".to_string(),
                 voice_female: "f".to_string(),
                 voice_male: "m".to_string(),
+                voice_en_female: "enf".to_string(),
+                voice_en_male: "enm".to_string(),
                 default_gender: "female".to_string(),
                 rate: 0,
                 pitch: 0,
@@ -57,6 +60,7 @@ mod tests {
                 audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
             },
             abbreviations: HashMap::new(),
+            ai: crate::config::AiConfig::default(),
         }
     }
 
