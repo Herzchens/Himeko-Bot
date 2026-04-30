@@ -50,7 +50,7 @@ pub async fn makecustom(
             }
         }
 
-        // Now check if they are bots (must do outside the guild lock to allow await)
+        // Kiểm tra bot một cách chắc chắn bằng HTTP request
         for user_id in channel_users {
             let mut is_bot = false;
             let mut found = false;
@@ -119,12 +119,12 @@ pub async fn makecustom(
     ];
     let map = maps.choose(&mut rng()).unwrap();
 
-    let mut response = format!("🎲 **VALORANT CUSTOM MATCH** 🎲\n🗺️ **Map**: {}\n\n⚔️ **Phe Tấn Công (Attackers)**:\n", map);
+    let mut response = format!("**VALORANT CUSTOM MATCH** \n **Map**: {}\n\n **Phe Tấn Công (Attackers)**:\n", map);
     for player in team_a {
         response.push_str(&format!("- <@{}>\n", player.get()));
     }
 
-    response.push_str("\n🛡️ **Phe Phòng Thủ (Defenders)**:\n");
+    response.push_str("\n**Phe Phòng Thủ (Defenders)**:\n");
     for player in team_b {
         response.push_str(&format!("- <@{}>\n", player.get()));
     }
