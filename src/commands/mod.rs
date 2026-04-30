@@ -4,3 +4,4 @@ pub mod leave;
 pub mod ping;
 pub mod reload;
 pub mod ask;
+pub mod makecustom;

@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::gender::gender(),
                 commands::reload::reload(),
                 commands::ask::ask(),
+                commands::makecustom::makecustom(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
