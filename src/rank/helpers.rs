@@ -1,10 +1,11 @@
 use crate::Data;
 use serenity::all::{GuildId, Http, Member, RoleId, UserId};
-use std::sync::Arc;
+
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+#[allow(deprecated)]
 pub async fn check_admin_permission(ctx: Context<'_>) -> bool {
     let member = match ctx.author_member().await {
         Some(m) => m,

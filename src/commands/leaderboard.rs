@@ -1,4 +1,4 @@
-use crate::rank::logic;
+
 use crate::Data;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -11,7 +11,6 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
         ctx.send(poise::CreateReply::default().content("❌ Hệ thống rank đang tắt.").ephemeral(true)).await?;
         return Ok(());
     }
-    let rank_config = config_lock.rank.clone();
     drop(config_lock);
 
     let db = ctx.data().rank_db.read().await;
@@ -34,11 +33,6 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
 
     let mut lines = Vec::new();
     for (i, (uid, user_data)) in ranked_users.iter().enumerate() {
-        let rank_str = match logic::format_nickname(&rank_config, user_data.level) {
-            Ok(s) => s,
-            Err(_) => "UNKNOWN".to_string(),
-        };
-
         let medal = match i {
             0 => "🥇",
             1 => "🥈",
@@ -46,7 +40,7 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
             _ => "  ",
         };
 
-        lines.push(format!("{} #{} <@{}> — {}  (Lv.{})", medal, i + 1, uid, rank_str, user_data.level));
+        lines.push(format!("{} #{} <@{}> (Lv.{})", medal, i + 1, uid, user_data.level));
     }
 
     let embed = serenity::all::CreateEmbed::new()

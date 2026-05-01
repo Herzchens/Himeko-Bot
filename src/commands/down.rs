@@ -76,7 +76,7 @@ pub async fn down(
         }
 
         let mut auto_removed = false;
-        let mut expected_nick = String::new();
+        let expected_nick;
         let new_level = user_level - 1;
 
         if new_level == 0 {

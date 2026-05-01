@@ -29,7 +29,7 @@ pub struct Data {
     pub rank_db: Arc<tokio::sync::RwLock<rank::db::RankDatabase>>,
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -98,15 +98,14 @@ async fn main() -> anyhow::Result<()> {
         })
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                
+                let _ = poise::builtins::register_globally(ctx, &Vec::<poise::Command<Data, Box<dyn std::error::Error + Send + Sync>>>::new()).await;
                 for guild in ctx.cache.guilds() {
-                    let _ = poise::builtins::register_in_guild(ctx, &Vec::<poise::Command<Data, Error>>::new(), guild).await;
+                    let _ = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild).await;
                 }
 
                 tracing::info!(
                     commands = framework.options().commands.len(),
-                    "slash commands registered globally"
+                    "slash commands registered in guilds (instant update)"
                 );
                 let data = Data {
                     config: RwLock::new(config_clone.clone()),
@@ -235,14 +234,13 @@ async fn run_monthly_ping(
 
     let mut lines = Vec::new();
     for (i, (uid, user_data)) in top3.iter().enumerate() {
-        let rank_str = rank::logic::format_nickname(rank_config, user_data.level)?;
         let medal = match i {
             0 => "🥇",
             1 => "🥈",
             2 => "🥉",
             _ => "  ",
         };
-        lines.push(format!("{} #{} <@{}> — {} (Lv.{})", medal, i + 1, uid, rank_str, user_data.level));
+        lines.push(format!("{} #{} <@{}> (Lv.{})", medal, i + 1, uid, user_data.level));
     }
 
     let embed = serenity::all::CreateEmbed::new()
