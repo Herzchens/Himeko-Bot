@@ -29,7 +29,7 @@
 | `/leave` | Make bot leaves the voice room |
 | `/up @user1 @user2 ...` | Increase rank by 1 level (Admin) |
 | `/down @user1 @user2 ...` | Decrease rank by 1 level (Admin) |
-| `/rank_remove @user1 @user2 ...` | Remove rank and restore original name (Admin) |
+| `/remove @user1 @user2 ...` | Remove rank and restore original name (Admin) |
 | `/leaderboard` | Display server rank leaderboard |
 | `/autorename on\|off` | Toggle auto-rename guard (Admin) |
 
