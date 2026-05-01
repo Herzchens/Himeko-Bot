@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::makecustom::makecustom(),
                 commands::up::up(),
                 commands::down::down(),
-                commands::rank_remove::rank_remove(),
+                commands::remove::remove(),
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
             ],

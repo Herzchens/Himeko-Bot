@@ -30,6 +30,7 @@ pub async fn down(
         .await?;
         return Ok(());
     }
+    ctx.defer().await?;
 
     let config_lock = ctx.data().config.read().await;
     if !config_lock.rank.enabled {
@@ -108,13 +109,12 @@ pub async fn down(
             }
         }
 
-        let note_str = assessment.note.map(|n| format!(" [{}]", n)).unwrap_or_default();
         let icon = if assessment.can_rename { "✅" } else { "⚠️" };
 
         if auto_removed {
-            response_lines.push(format!("{} <@{}> → Đã gỡ cấp bậc (trả tên cũ){} [Role removed]", icon, user_id, note_str));
+            response_lines.push(format!("{} <@{}> → Đã gỡ cấp bậc (trả tên cũ)", icon, user_id));
         } else {
-            response_lines.push(format!("{} <@{}> → {} (Lv.{}){}", icon, user_id, expected_nick, new_level, note_str));
+            response_lines.push(format!("{} <@{}> → {} (Lv.{})", icon, user_id, expected_nick, new_level));
         }
     }
 

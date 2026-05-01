@@ -21,7 +21,6 @@ pub async fn check_admin_permission(ctx: Context<'_>) -> bool {
 pub struct MemberAssessment {
     pub can_rename: bool,
     pub role_added: bool,
-    pub note: Option<String>,
 }
 
 pub async fn assess_member(
@@ -66,19 +65,9 @@ pub async fn assess_member(
         bot_highest > target_highest
     };
 
-    let mut note = None;
-    if !can_rename {
-        note = Some(if member.user.id == guild.owner_id {
-            "chủ server (chỉ lưu data)".to_string()
-        } else {
-            "role cao hơn bot (chỉ lưu data)".to_string()
-        });
-    }
-
     Ok(MemberAssessment {
         can_rename,
         role_added,
-        note,
     })
 }
 

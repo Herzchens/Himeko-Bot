@@ -30,6 +30,7 @@ pub async fn up(
         .await?;
         return Ok(());
     }
+    ctx.defer().await?;
 
     let config_lock = ctx.data().config.read().await;
     if !config_lock.rank.enabled {
@@ -84,10 +85,8 @@ pub async fn up(
         };
 
         let max_lvl = rank_config.max_level();
-        let mut note = assessment.note;
 
         if user_data.level >= max_lvl {
-            note = Some("đã đạt cấp tối đa".to_string());
         } else {
             user_data.level += 1;
         }
@@ -104,10 +103,7 @@ pub async fn up(
             let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;
         }
 
-        let role_note = if assessment.role_added { " [đã gắn role]" } else { "" };
-        let note_str = note.map(|n| format!(" [{}]", n)).unwrap_or_default();
-
-        let icon = if note_str.contains("tối đa") {
+        let icon = if user_data.level >= max_lvl && new_level == max_lvl {
             "⛔"
         } else if assessment.can_rename {
             "✅"
@@ -115,7 +111,7 @@ pub async fn up(
             "⚠️"
         };
 
-        response_lines.push(format!("{} <@{}> → {} (Lv.{}){}{}", icon, user_id, expected_nick, new_level, note_str, role_note));
+        response_lines.push(format!("{} <@{}> → {} (Lv.{})", icon, user_id, expected_nick, new_level));
     }
 
     let _ = db.save("database.yml");

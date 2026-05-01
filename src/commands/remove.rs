@@ -17,7 +17,7 @@ fn extract_mentions(text: &str) -> Vec<UserId> {
 }
 
 #[poise::command(slash_command)]
-pub async fn rank_remove(
+pub async fn remove(
     ctx: Context<'_>,
     #[description = "Tag những người cần gỡ cấp (vd: @A @B)"] users: String,
 ) -> Result<(), Error> {
@@ -30,6 +30,7 @@ pub async fn rank_remove(
         .await?;
         return Ok(());
     }
+    ctx.defer().await?;
 
     let config_lock = ctx.data().config.read().await;
     if !config_lock.rank.enabled {
@@ -83,10 +84,9 @@ pub async fn rank_remove(
             let _ = guild_id.member(http, user_id).await.unwrap().remove_role(http, RoleId::new(rank_config.target_role_id)).await;
         }
 
-        let note_str = assessment.note.map(|n| format!(" [{}]", n)).unwrap_or_default();
         let icon = if assessment.can_rename { "✅" } else { "⚠️" };
 
-        response_lines.push(format!("{} <@{}> → Đã gỡ cấp bậc (trả tên cũ){} [Role removed]", icon, user_id, note_str));
+        response_lines.push(format!("{} <@{}> → Đã gỡ cấp bậc (trả tên cũ)", icon, user_id));
     }
 
     let _ = db.save("database.yml");
