@@ -4,6 +4,7 @@ use crate::Data;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Xem bảng xếp hạng cấp bậc trong Server
 #[poise::command(slash_command)]
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     let config_lock = ctx.data().config.read().await;

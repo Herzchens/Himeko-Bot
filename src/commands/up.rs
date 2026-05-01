@@ -16,6 +16,7 @@ fn extract_mentions(text: &str) -> Vec<UserId> {
     mentions
 }
 
+/// Tăng cấp bậc cho thành viên (Cần quyền Admin)
 #[poise::command(slash_command)]
 pub async fn up(
     ctx: Context<'_>,

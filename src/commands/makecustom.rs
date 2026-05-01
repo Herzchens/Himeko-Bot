@@ -24,6 +24,7 @@ fn extract_mentions(text: &str) -> Vec<UserId> {
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Chia team ngẫu nhiên cho Valorant Custom
 #[poise::command(slash_command)]
 pub async fn makecustom(
     ctx: Context<'_>,

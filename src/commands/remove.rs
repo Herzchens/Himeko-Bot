@@ -16,6 +16,7 @@ fn extract_mentions(text: &str) -> Vec<UserId> {
     mentions
 }
 
+/// Gỡ bỏ hoàn toàn cấp bậc của thành viên (Cần quyền Admin)
 #[poise::command(slash_command)]
 pub async fn remove(
     ctx: Context<'_>,

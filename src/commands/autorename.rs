@@ -4,6 +4,7 @@ use crate::Data;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// Bật/Tắt tính năng tự động đổi tên theo cấp bậc (Cần quyền Admin)
 #[poise::command(slash_command)]
 pub async fn autorename(
     ctx: Context<'_>,
