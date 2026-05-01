@@ -73,8 +73,15 @@ pub async fn up(
 
         let user_data = db.users.entry(uid_str).or_insert_with(|| RankUserData {
             level: 0,
-            original_name: current_nick,
+            original_name: current_nick.clone(),
         });
+
+        let old_level = user_data.level;
+        let old_expected_nick = if old_level > 0 {
+            logic::format_nickname(&rank_config, old_level).unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         let max_lvl = rank_config.max_level();
         let mut note = assessment.note;
@@ -86,7 +93,12 @@ pub async fn up(
         }
 
         let new_level = user_data.level;
-        let expected_nick = logic::format_nickname(&rank_config, new_level)?;
+        let mut expected_nick = logic::format_nickname(&rank_config, new_level)?;
+
+        if old_level > 0 && current_nick.starts_with(&old_expected_nick) {
+            let suffix = &current_nick[old_expected_nick.len()..];
+            expected_nick.push_str(suffix);
+        }
 
         if assessment.can_rename && new_level > 0 {
             let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;

@@ -39,7 +39,7 @@ pub async fn handle_member_update(
 
     let current_nick = event_data.nick.as_deref().unwrap_or(&event_data.user.name);
 
-    if current_nick != expected_nick {
+    if !current_nick.starts_with(&expected_nick) {
         let http = &ctx.http;
         let guild_id = event_data.guild_id;
         let bot_user_id = ctx.cache.current_user().id;

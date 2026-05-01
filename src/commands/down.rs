@@ -69,6 +69,7 @@ pub async fn down(
         let assessment = helpers::assess_member(&http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
 
         let user_level = db.users.get(&uid_str).map(|u| u.level).unwrap_or(0);
+        let current_nick = member.nick.as_deref().unwrap_or(&member.user.name).to_string();
 
         if user_level == 0 {
             response_lines.push(format!("⛔ <@{}> chưa có cấp bậc.", user_id));
@@ -93,7 +94,15 @@ pub async fn down(
         } else {
             let u = db.users.get_mut(&uid_str).unwrap();
             u.level = new_level;
-            expected_nick = logic::format_nickname(&rank_config, new_level)?;
+            
+            let old_expected_nick = logic::format_nickname(&rank_config, user_level).unwrap_or_default();
+            let mut new_expected_nick = logic::format_nickname(&rank_config, new_level)?;
+            
+            if current_nick.starts_with(&old_expected_nick) {
+                let suffix = &current_nick[old_expected_nick.len()..];
+                new_expected_nick.push_str(suffix);
+            }
+            expected_nick = new_expected_nick;
             if assessment.can_rename {
                 let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;
             }
