@@ -155,7 +155,6 @@ pub async fn handle_message(
 
     let tts_engine = data.tts_engine.read().await;
     
-    // Đảm bảo các tin nhắn được đọc theo thứ tự bằng cách lock theo guild trước khi gọi API
     let queue_lock = data.state.get_queue_lock(guild_id);
     let _guard = queue_lock.lock().await;
 
@@ -187,8 +186,20 @@ pub async fn event_handler(
     _framework: poise::FrameworkContext<'_, Data, Box<dyn std::error::Error + Send + Sync>>,
     data: &Data,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if let FullEvent::Message { new_message } = event {
-        handle_message(ctx, new_message, data).await;
+    match event {
+        FullEvent::Message { new_message } => {
+            handle_message(ctx, new_message, data).await;
+        }
+        FullEvent::GuildMemberUpdate {
+            old_if_available,
+            new,
+            event: event_data,
+        } => {
+            crate::events::member_update::handle_member_update(
+                ctx, old_if_available, new, event_data, data,
+            ).await;
+        }
+        _ => {}
     }
     Ok(())
 }

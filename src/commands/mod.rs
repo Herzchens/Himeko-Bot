@@ -5,3 +5,8 @@ pub mod ping;
 pub mod reload;
 pub mod ask;
 pub mod makecustom;
+pub mod up;
+pub mod down;
+pub mod remove;
+pub mod leaderboard;
+pub mod autorename;

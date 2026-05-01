@@ -10,6 +10,7 @@
 - **Text-to-Speech** — Himeko joins your voice channel and reads messages in real time
 - **Bilingual auto-detection** — automatically switches between Vietnamese and English voices without any manual input
 - **AI integration** — ask questions via slash command or `@mention`; supports Google Gemini and Groq as backends
+- **Rank System** — manage member ranks with configurable tiers and star levels
 - **Hot-reload config** — update settings on the fly with `/reload`, no restart needed
 - **Fully config-driven** — voices, provider, language rules, and bot behavior are all controlled via `config.yml`
 - **Make custom valorant matches** - Random map and split player into 2 sides.
@@ -26,6 +27,13 @@
 |`/gender <gender>` | Change the gender of the TTS (gTTS doesn't have gender) |
 | `/join` | Make bot joins the voice room |
 | `/leave` | Make bot leaves the voice room |
+| `/up @user1 @user2 ...` | Increase rank by 1 level (Admin) |
+| `/down @user1 @user2 ...` | Decrease rank by 1 level (Admin) |
+| `/rank_remove @user1 @user2 ...` | Remove rank and restore original name (Admin) |
+| `/leaderboard` | Display server rank leaderboard |
+| `/autorename on\|off` | Toggle auto-rename guard (Admin) |
+
+Bot needs **Manage Nicknames** and **Manage Roles** permissions for the rank system.
 
 
 TTS is passive — just type in a watched text channel while Himeko is in your voice channel.
