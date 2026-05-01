@@ -10,6 +10,8 @@ pub struct Config {
     pub abbreviations: HashMap<String, String>,
     #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
+    pub rank: RankConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -141,6 +143,48 @@ impl Config {
         if self.permissions.owner_id == 0 {
             anyhow::bail!("permissions.owner_id must be set");
         }
+        if self.rank.enabled && self.rank.ranks.is_empty() {
+            anyhow::bail!("rank.ranks cannot be empty if rank system is enabled");
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RankConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub guild_id: u64,
+    #[serde(default)]
+    pub target_role_id: u64,
+    #[serde(default)]
+    pub leaderboard_channel_id: u64,
+    #[serde(default = "default_stars_per_rank")]
+    pub stars_per_rank: u8,
+    #[serde(default = "default_ranks")]
+    pub ranks: Vec<String>,
+}
+
+fn default_stars_per_rank() -> u8 {
+    3
+}
+
+fn default_ranks() -> Vec<String> {
+    vec![]
+}
+
+impl RankConfig {
+    pub fn max_level(&self) -> u8 {
+        (self.ranks.len() as u8) * self.stars_per_rank
+    }
+
+    pub fn level_to_display(&self, level: u8) -> anyhow::Result<(&str, u8)> {
+        if level == 0 || level > self.max_level() {
+            anyhow::bail!("level {} is out of bounds", level);
+        }
+        let rank_idx = (level - 1) / self.stars_per_rank;
+        let stars = (level - 1) % self.stars_per_rank + 1;
+        Ok((&self.ranks[rank_idx as usize], stars))
     }
 }
