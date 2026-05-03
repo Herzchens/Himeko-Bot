@@ -98,10 +98,10 @@ async fn main() -> anyhow::Result<()> {
         })
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                let _ = poise::builtins::register_globally(ctx, &Vec::<poise::Command<Data, Box<dyn std::error::Error + Send + Sync>>>::new()).await;
-                for guild in ctx.cache.guilds() {
-                    let _ = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild).await;
-                }
+                // Register commands globally. 
+                // Global commands can take up to an hour to propagate, but this prevents duplicates 
+                // and is the standard for production bots.
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
 
                 tracing::info!(
                     commands = framework.options().commands.len(),
