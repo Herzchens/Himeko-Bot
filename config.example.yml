@@ -61,8 +61,8 @@ tts:
   # Cần chạy: pip install vieneu && python vieneu_server.py
   vieneu:
     - server_url: "http://127.0.0.1:7799"
-    - female: "Ly" # Có thể thay bằng đường dẫn file âm thanh wav để clone giọng (ví dụ: "c:/Himeko-Bot/himeko_voice.wav")
-    - male: "Binh"
+    - female: "Ly" # Giọng nữ. Cho standard/gpu mặc định dùng "Ly" (Trúc Ly). Cho turbo/turbo_gpu hãy dùng "Bích Ngọc" hoặc "Thục Đoan". (Hoặc path âm thanh wav/mp3 để clone)
+    - male: "Binh" # Giọng nam. Cho standard/gpu mặc định dùng "Binh" (Thanh Bình). Cho turbo/turbo_gpu hãy dùng "Phạm Tuyên" hoặc "Xuân Vĩnh"
     - speed: 1.0
     - autostart: false # Tự động chạy server vieneu khi bot chạy (true | false)
     - mode: "turbo" # Chế độ chạy: "turbo" (CPU nhanh) | "turbo_gpu" (GPU Nvidia nhanh) | "standard" (CPU chuẩn) | "gpu" (GPU Nvidia chuẩn)

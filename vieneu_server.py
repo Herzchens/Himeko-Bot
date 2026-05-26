@@ -68,7 +68,6 @@ def get_voice_data(voice_name: str):
     v_name_lower = voice_name.lower().strip()
     try:
         presets = tts.list_preset_voices()
-        # First pass: try exact or case-insensitive or description match
         for item in presets:
             desc, v_id = item if isinstance(item, tuple) else (item, item)
             v_id_lower = v_id.lower()
@@ -76,19 +75,9 @@ def get_voice_data(voice_name: str):
             if v_id_lower == v_name_lower or v_id_lower in v_name_lower or v_name_lower in v_id_lower or v_name_lower in desc_lower:
                 return tts.get_preset_voice(v_id)
                 
-        # Second pass: gender fallback mapping (e.g. Binh -> male voice, Ly -> female voice)
-        is_male_req = any(kw in v_name_lower for kw in ["nam", "binh", "tuyen", "vinh", "son", "male", "guy"])
-        for item in presets:
-            desc, v_id = item if isinstance(item, tuple) else (item, item)
-            desc_lower = desc.lower()
-            v_id_lower = v_id.lower()
-            if is_male_req and ("nam" in desc_lower or "nam" in v_id_lower):
-                return tts.get_preset_voice(v_id)
-            if not is_male_req and ("nữ" in desc_lower or "nu" in desc_lower or "nữ" in v_id_lower or "nu" in v_id_lower):
-                return tts.get_preset_voice(v_id)
-                
         # Fallback to the first available preset voice
         first_id = presets[0][1] if isinstance(presets[0], tuple) else presets[0]
+        print(f"Warning: Voice '{voice_name}' not found, falling back to first preset: '{first_id}'")
         return tts.get_preset_voice(first_id)
     except Exception as e:
         print(f"Failed to match preset voice: {e}")
