@@ -241,6 +241,7 @@ pub async fn handle_message(
     let queue_lock = data.state.get_queue_lock(guild_id);
     let _guard = queue_lock.lock().await;
 
+    let start_time = std::time::Instant::now();
     let audio_bytes = match tts_engine.synthesize(&text_to_speak, &voice).await {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -248,6 +249,7 @@ pub async fn handle_message(
             return;
         }
     };
+    let elapsed_ms = start_time.elapsed().as_millis();
 
     let log_voice = resolve_log_voice(&config, &voice);
     tracing::info!(
@@ -257,6 +259,7 @@ pub async fn handle_message(
         chars = text_to_speak.len(),
         voice = %log_voice,
         audio_bytes = audio_bytes.len(),
+        elapsed_ms = elapsed_ms,
         "TTS synthesized"
     );
 
