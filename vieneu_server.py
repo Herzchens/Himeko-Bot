@@ -110,16 +110,27 @@ def change_speed(audio, speed: float):
 
 @app.post("/v1/tts")
 async def tts_endpoint(req: TtsRequest):
+    import time
+    t_start = time.time()
     if tts is None:
         raise HTTPException(status_code=500, detail="VieNeu-TTS engine is not initialized.")
     try:
+        t0 = time.time()
         voice_data = get_voice_data(req.voice)
+        t_voice = time.time() - t0
         
         # If temperature is 0, fall back to default randomness (1.0)
         temp = req.temperature if req.temperature > 1e-5 else 1.0
-        audio = tts.infer(req.text, voice=voice_data, temperature=temp)
-        audio = change_speed(audio, req.speed)
         
+        t0 = time.time()
+        audio = tts.infer(req.text, voice=voice_data, temperature=temp)
+        t_infer = time.time() - t0
+        
+        t0 = time.time()
+        audio = change_speed(audio, req.speed)
+        t_speed = time.time() - t0
+        
+        t0 = time.time()
         sample_rate = getattr(tts, "sample_rate", 24000)
         out_buf = io.BytesIO()
         # Convert float32 array (-1.0 to 1.0) to int16 array (-32768 to 32767) for native WAV writing
@@ -130,9 +141,14 @@ async def tts_endpoint(req: TtsRequest):
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(audio_int16.tobytes())
         wav_bytes = out_buf.getvalue()
+        t_wav = time.time() - t0
+        
+        t_total = time.time() - t_start
+        print(f"⏱️ TTS synthesis timing: text='{req.text}', voice_match={t_voice:.3f}s, infer={t_infer:.3f}s, speed={t_speed:.3f}s, wav_write={t_wav:.3f}s, total={t_total:.3f}s", flush=True)
         
         return Response(content=wav_bytes, media_type="audio/wav")
     except Exception as e:
+        print(f"❌ Error during synthesis: {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
