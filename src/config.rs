@@ -79,24 +79,17 @@ pub struct PermissionsConfig {
     pub allowed_users: Vec<u64>,
 }
 
-fn default_voice_en_female() -> String {
-    "en-US-JennyNeural".to_string()
-}
-
-fn default_voice_en_male() -> String {
-    "en-US-GuyNeural".to_string()
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
-    pub voice_female: String,
-    pub voice_male: String,
-    #[serde(default = "default_voice_en_female")]
-    pub voice_en_female: String,
-    #[serde(default = "default_voice_en_male")]
-    pub voice_en_male: String,
+    pub msedge: Vec<HashMap<String, String>>,
+    #[serde(default)]
+    pub supertonic: Option<Vec<HashMap<String, serde_yaml::Value>>>,
+    #[serde(default)]
+    pub openai: Option<Vec<HashMap<String, serde_yaml::Value>>>,
+    #[serde(default)]
+    pub vieneu: Option<Vec<HashMap<String, serde_yaml::Value>>>,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]
@@ -109,6 +102,206 @@ pub struct TtsConfig {
     pub audio_format: String,
 }
 
+impl TtsConfig {
+    pub fn get_msedge_voice(&self, key: &str) -> String {
+        for map in &self.msedge {
+            if let Some(val) = map.get(key) {
+                return val.clone();
+            }
+        }
+        match key {
+            "female" => "vi-VN-HoaiMyNeural".to_string(),
+            "male" => "vi-VN-NamMinhNeural".to_string(),
+            "en_female" => "en-US-JennyNeural".to_string(),
+            "en_male" => "en-US-GuyNeural".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    pub fn get_active_voice(&self, is_female: bool) -> String {
+        match self.provider.as_str() {
+            "supertonic" => {
+                if let Some(ref list) = self.supertonic {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "F2".to_string() } else { "M1".to_string() }
+            }
+            "openai" => {
+                if let Some(ref list) = self.openai {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "nova".to_string() } else { "onyx".to_string() }
+            }
+            "vieneu" => {
+                if let Some(ref list) = self.vieneu {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "truc_ly".to_string() } else { "nam_phuong".to_string() }
+            }
+            _ => {
+                let key = if is_female { "female" } else { "male" };
+                self.get_msedge_voice(key)
+            }
+        }
+    }
+
+    pub fn get_supertonic_config(&self) -> Option<SupertonicConfig> {
+        let list = self.supertonic.as_ref()?;
+        let mut server_url = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut lang = None;
+        let mut steps = None;
+        let mut speed = None;
+        let mut autostart = true;
+
+        for map in list {
+            if let Some(val) = map.get("server_url") {
+                server_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("lang") {
+                lang = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("steps") {
+                steps = val.as_u64().map(|v| v as u8);
+            }
+            if let Some(val) = map.get("speed") {
+                speed = val.as_f64().map(|v| v as f32);
+            }
+            if let Some(val) = map.get("autostart") {
+                autostart = val.as_bool().unwrap_or(true);
+            }
+        }
+
+        Some(SupertonicConfig {
+            server_url: server_url?,
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            lang: lang.unwrap_or_else(|| "vi".to_string()),
+            steps,
+            speed,
+            autostart,
+        })
+    }
+
+    pub fn get_openai_config(&self) -> Option<OpenAiTtsConfig> {
+        let list = self.openai.as_ref()?;
+        let mut api_url = None;
+        let mut api_key = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut model = None;
+
+        for map in list {
+            if let Some(val) = map.get("api_url") {
+                api_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("api_key") {
+                api_key = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("model") {
+                model = val.as_str().map(String::from);
+            }
+        }
+
+        Some(OpenAiTtsConfig {
+            api_url: api_url?,
+            api_key: api_key.unwrap_or_default(),
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            model: model.unwrap_or_else(|| "tts-1".to_string()),
+        })
+    }
+
+    pub fn get_vieneu_config(&self) -> Option<VieneuConfig> {
+        let list = self.vieneu.as_ref()?;
+        let mut server_url = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut speed = None;
+        let mut autostart = true;
+        let mut mode = None;
+        let mut temperature = None;
+        let mut device = None;
+        let mut pitch = None;
+
+        for map in list {
+            if let Some(val) = map.get("server_url") {
+                server_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("speed") {
+                speed = val.as_f64().map(|v| v as f32);
+            }
+            if let Some(val) = map.get("autostart") {
+                autostart = val.as_bool().unwrap_or(true);
+            }
+            if let Some(val) = map.get("mode") {
+                mode = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("temperature") {
+                temperature = val.as_f64().map(|v| v as f32);
+            }
+            if let Some(val) = map.get("device") {
+                device = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("pitch") {
+                pitch = val.as_i64().map(|v| v as i32);
+            }
+        }
+
+        Some(VieneuConfig {
+            server_url: server_url?,
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            speed,
+            autostart,
+            mode,
+            temperature,
+            device,
+            pitch,
+        })
+    }
+}
+
 fn default_gender() -> String {
     "female".to_string()
 }
@@ -117,10 +310,43 @@ fn default_provider() -> String {
     "msedge".to_string()
 }
 
-
-
 fn default_audio_format() -> String {
     "audio-24khz-48kbitrate-mono-mp3".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct VieneuConfig {
+    pub server_url: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub speed: Option<f32>,
+    #[serde(default = "default_true")]
+    pub autostart: bool,
+    pub mode: Option<String>,
+    pub temperature: Option<f32>,
+    pub device: Option<String>,
+    pub pitch: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SupertonicConfig {
+    pub server_url: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub lang: String,
+    pub steps: Option<u8>,
+    pub speed: Option<f32>,
+    #[serde(default = "default_true")]
+    pub autostart: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OpenAiTtsConfig {
+    pub api_url: String,
+    pub api_key: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub model: String,
 }
 
 impl Config {

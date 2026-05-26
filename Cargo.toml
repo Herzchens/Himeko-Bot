@@ -13,7 +13,7 @@ serenity = { version = "0.12.5", default-features = false, features = [
 ]}
 poise     = "0.6.2"
 songbird  = { version = "0.6", features = ["serenity", "rustls", "builtin-queue"] }
-symphonia = { version = "0.5.5", features = ["mp3"] }
+symphonia = { version = "0.5.5", features = ["mp3", "wav"] }
 
 # TTS
 msedge-tts = "0.3"

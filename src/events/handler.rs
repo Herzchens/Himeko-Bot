@@ -91,13 +91,96 @@ fn select_voice(
     config: &crate::config::Config,
     is_english: bool,
     is_female: bool,
-) -> &str {
+) -> String {
     if is_english {
-        if is_female { &config.tts.voice_en_female } else { &config.tts.voice_en_male }
+        if is_female {
+            config.tts.get_msedge_voice("en_female")
+        } else {
+            config.tts.get_msedge_voice("en_male")
+        }
     } else if is_female {
-        &config.tts.voice_female
+        config.tts.get_msedge_voice("female")
     } else {
-        &config.tts.voice_male
+        config.tts.get_msedge_voice("male")
+    }
+}
+
+fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &'a str {
+    match config.tts.provider.as_str() {
+        "gtts" => {
+            if voice.starts_with("en-") || voice == "en" {
+                "en"
+            } else {
+                "vi"
+            }
+        }
+        "supertonic" => {
+            if let Some(ref list) = config.tts.supertonic {
+                if voice.contains('-') {
+                    let lower = voice.to_lowercase();
+                    let is_male = lower.contains("nam")
+                        || lower.contains("guy")
+                        || lower.contains("male")
+                            && !lower.contains("female");
+                    let key = if is_male { "male" } else { "female" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s;
+                            }
+                        }
+                    }
+                }
+                voice
+            } else {
+                voice
+            }
+        }
+        "openai" => {
+            if let Some(ref list) = config.tts.openai {
+                if voice.contains('-') {
+                    let lower = voice.to_lowercase();
+                    let is_male = lower.contains("nam")
+                        || lower.contains("guy")
+                        || lower.contains("male")
+                            && !lower.contains("female");
+                    let key = if is_male { "male" } else { "female" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s;
+                            }
+                        }
+                    }
+                }
+                voice
+            } else {
+                voice
+            }
+        }
+        "vieneu" => {
+            if let Some(ref list) = config.tts.vieneu {
+                if voice.contains('-') {
+                    let lower = voice.to_lowercase();
+                    let is_male = lower.contains("nam")
+                        || lower.contains("guy")
+                        || lower.contains("male")
+                            && !lower.contains("female");
+                    let key = if is_male { "male" } else { "female" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s;
+                            }
+                        }
+                    }
+                }
+                voice
+            } else {
+                voice
+            }
+        }
+        _ => voice,
     }
 }
 
@@ -119,7 +202,7 @@ pub async fn handle_message(
         None => return,
     };
 
-    let config = data.config.read().await;
+    let config = data.config.read().await.clone();
     let user_level = UserLevel::of(msg.author.id.get(), &config);
     if !user_level.can_use_tts() || data.state.is_idle(guild_id) {
         return;
@@ -137,46 +220,103 @@ pub async fn handle_message(
         return;
     }
 
-    let normalizer = data.normalizer.read().await;
+    let normalizer = data.normalizer.read().await.clone();
     let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
     if processed.is_empty() {
         return;
     }
 
-    let text_to_speak = if config.tts.max_chars > 0 && processed.len() > config.tts.max_chars {
-        processed[..config.tts.max_chars].to_string()
+    let text_to_speak = if config.tts.max_chars > 0 && processed.chars().count() > config.tts.max_chars {
+        processed.chars().take(config.tts.max_chars).collect::<String>()
     } else {
         processed
     };
 
     let is_english = detect_language(&text_to_speak.trim().to_lowercase(), &text_to_speak, &data.language_detector);
-    let is_female = data.state.is_female(guild_id);
+    let is_female = data.state.is_female(msg.author.id);
     let voice = select_voice(&config, is_english, is_female);
 
-    let tts_engine = data.tts_engine.read().await;
-    
-    let queue_lock = data.state.get_queue_lock(guild_id);
-    let _guard = queue_lock.lock().await;
+    let tts_engine = data.tts_engine.read().await.clone();
 
-    let audio_bytes = match tts_engine.synthesize(&text_to_speak, voice).await {
+    let start_time = std::time::Instant::now();
+    let audio_bytes = match tts_engine.synthesize(&text_to_speak, &voice).await {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(guild = %guild_id, user = %msg.author.id, error = %e, "TTS synthesis failed");
             return;
         }
     };
+    let elapsed_ms = start_time.elapsed().as_millis();
 
-    tracing::info!(guild = %guild_id, user = %msg.author.id, chars = text_to_speak.len(), voice = %voice, audio_bytes = audio_bytes.len(), "TTS synthesized");
+    let log_voice = resolve_log_voice(&config, &voice);
+    tracing::info!(
+        guild = %guild_id,
+        user = %msg.author.id,
+        provider = %config.tts.provider,
+        chars = text_to_speak.len(),
+        voice = %log_voice,
+        audio_bytes = audio_bytes.len(),
+        elapsed_ms = elapsed_ms,
+        "TTS synthesized"
+    );
 
     if audio_bytes.is_empty() {
         tracing::error!("TTS engine returned 0 bytes! (Check if the voice name is correct or if text is empty)");
         return;
     }
 
+    let queue_lock = data.state.get_queue_lock(guild_id);
+    let _guard = queue_lock.lock().await;
     if let Some(handler_lock) = manager.get(guild_id) {
         let input = songbird::input::Input::from(audio_bytes);
         let mut handler = handler_lock.lock().await;
         handler.enqueue_input(input).await;
+    }
+}
+
+async fn attempt_rejoin(
+    ctx: &serenity::client::Context,
+    guild_id: serenity::model::id::GuildId,
+    channel_id: serenity::model::id::ChannelId,
+    data: &Data,
+) {
+    let manager = match songbird::get(ctx).await {
+        Some(m) => m,
+        None => return,
+    };
+
+    for attempt in 1..=3u32 {
+        let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+        tokio::time::sleep(delay).await;
+
+        match manager.join(guild_id, channel_id).await {
+            Ok(_) => {
+                tracing::info!(guild = %guild_id, channel = %channel_id, attempt, "auto-rejoin succeeded");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(guild = %guild_id, attempt, error = %e, "auto-rejoin failed");
+            }
+        }
+    }
+
+    tracing::error!(guild = %guild_id, "auto-rejoin exhausted all attempts, clearing session");
+    data.state.clear_session(guild_id);
+}
+
+async fn handle_voice_state_update(
+    ctx: &serenity::client::Context,
+    new: &serenity::model::voice::VoiceState,
+    data: &Data,
+) {
+    let bot_id = ctx.cache.current_user().id;
+    if new.user_id == bot_id && new.channel_id.is_none() {
+        if let Some(guild_id) = new.guild_id {
+            if let Some(session) = data.state.get_session(guild_id) {
+                tracing::warn!(guild = %guild_id, "bot disconnected from voice, attempting rejoin");
+                attempt_rejoin(ctx, guild_id, session.channel_id, data).await;
+            }
+        }
     }
 }
 
@@ -198,6 +338,9 @@ pub async fn event_handler(
             crate::events::member_update::handle_member_update(
                 ctx, old_if_available, new, event_data, data,
             ).await;
+        }
+        FullEvent::VoiceStateUpdate { new, .. } => {
+            handle_voice_state_update(ctx, new, data).await;
         }
         _ => {}
     }

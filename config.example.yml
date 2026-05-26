@@ -13,14 +13,8 @@ permissions:
   allowed_users: []
 
 tts:
-  # Chọn engine: "gtts" hoặc "msedge"
+  # Chọn engine: "gtts" | "msedge" | "supertonic"
   provider: "msedge"
-
-  # Giọng nữ tiếng Việt của Edge TTS
-  voice_female: "vi-VN-HoaiMyNeural"
-  
-  # Giọng nam tiếng Việt của Edge TTS
-  voice_male: "vi-VN-NamMinhNeural"
 
   # Giọng mặc định khi bot khởi động: "female" hoặc "male"
   default_gender: "female"
@@ -36,6 +30,43 @@ tts:
 
   # Định dạng audio (Không nên đổi nếu không hiểu rõ)
   audio_format: "audio-24khz-48kbitrate-mono-mp3"
+
+  # Cấu hình giọng đọc Edge TTS
+  msedge:
+    - female: "vi-VN-HoaiMyNeural"
+    - male: "vi-VN-NamMinhNeural"
+    - en_female: "en-US-JennyNeural"
+    - en_male: "en-US-GuyNeural"
+
+  # --- Supertonic config (TTS local server) ---
+  # Cần chạy: pip install 'supertonic[serve]' && supertonic serve --port 7788
+  supertonic:
+    - server_url: "http://127.0.0.1:7788"
+    - female: "F2"
+    - male: "M1"
+    - lang: "vi"
+    - steps: 5
+    - speed: 1.05
+    - autostart: false # Tự động chạy server supertonic khi bot chạy (true | false)
+
+  # --- OpenAI-compatible config (e.g. VietTTS, F5-TTS, or official OpenAI API) ---
+  openai:
+    - api_url: "http://127.0.0.1:8000/v1"
+    - api_key: ""
+    - female: "vi-female"
+    - male: "vi-male"
+    - model: "tts-1"
+
+  # --- VieNeu-TTS config (TTS local CPU-optimized server) ---
+  # Cần chạy: pip install vieneu && python vieneu_server.py
+  vieneu:
+    - server_url: "http://127.0.0.1:7799"
+    - female: "Ly" # Giọng nữ. Cho standard/gpu mặc định dùng "Ly" (Trúc Ly). Cho turbo/turbo_gpu hãy dùng "Bích Ngọc" hoặc "Thục Đoan". (Hoặc path âm thanh wav/mp3 để clone)
+    - male: "Binh" # Giọng nam. Cho standard/gpu mặc định dùng "Binh" (Thanh Bình). Cho turbo/turbo_gpu hãy dùng "Phạm Tuyên" hoặc "Xuân Vĩnh"
+    - speed: 1.0
+    - autostart: false # Tự động chạy server vieneu khi bot chạy (true | false)
+    - mode: "turbo" # Chế độ chạy: "turbo" (CPU nhanh) | "turbo_gpu" (GPU Nvidia nhanh) | "standard" (GGUF CPU/GPU chất lượng cao) | "fast" (LMDeploy GPU chất lượng cao + siêu nhanh, cần pip install lmdeploy)
+    - temperature: 0.3 # Độ ngẫu nhiên/biến đổi tông giọng (0.3 = ổn định, 0.0 = ngẫu nhiên/tự nhiên hơn)
 
 abbreviations:
   # Từ viết tắt:

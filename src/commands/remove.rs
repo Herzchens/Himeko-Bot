@@ -68,7 +68,7 @@ pub async fn remove(
 
         let uid_str = user_id.get().to_string();
 
-        let assessment = helpers::assess_member(&http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
+        let assessment = helpers::assess_member(http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
 
         if !db.users.contains_key(&uid_str) {
             response_lines.push(format!("⛔ <@{}> chưa có cấp bậc.", user_id));
@@ -78,7 +78,7 @@ pub async fn remove(
         let original_name = db.users.remove(&uid_str).map(|u| u.original_name).unwrap_or_else(|| member.user.name.clone());
 
         if assessment.can_rename {
-            let _ = helpers::apply_nickname(&http, guild_id, user_id, &original_name).await;
+            let _ = helpers::apply_nickname(http, guild_id, user_id, &original_name).await;
         }
 
         if member.roles.contains(&RoleId::new(rank_config.target_role_id)) {
