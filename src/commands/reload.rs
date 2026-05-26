@@ -4,6 +4,7 @@ use crate::text::normalizer::Normalizer;
 use crate::tts::engine::MsEdgeEngine;
 use crate::tts::gtts::GttsEngine;
 use crate::tts::supertonic::SupertonicEngine;
+use crate::tts::openai::OpenAiEngine;
 use crate::tts::TtsEngine;
 use crate::Data;
 use poise::CreateReply;
@@ -48,6 +49,22 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
                             ctx.send(
                                 CreateReply::default()
                                     .content("❌ Config thiếu section [tts.supertonic] khi provider = \"supertonic\"")
+                                    .ephemeral(true),
+                            ).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                "openai" => {
+                    match new_config.tts.get_openai_config() {
+                        Some(oa_cfg) => {
+                            tracing::info!(url = %oa_cfg.api_url, model = %oa_cfg.model, "using OpenAI-compatible engine");
+                            Arc::new(OpenAiEngine::new(oa_cfg))
+                        }
+                        None => {
+                            ctx.send(
+                                CreateReply::default()
+                                    .content("❌ Config thiếu section [tts.openai] khi provider = \"openai\"")
                                     .ephemeral(true),
                             ).await?;
                             return Ok(());

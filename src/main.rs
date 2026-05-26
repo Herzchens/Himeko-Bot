@@ -15,6 +15,7 @@ use text::normalizer::Normalizer;
 use tts::engine::MsEdgeEngine;
 use tts::gtts::GttsEngine;
 use tts::supertonic::SupertonicEngine;
+use tts::openai::OpenAiEngine;
 use tts::TtsEngine;
 use tokio::sync::RwLock;
 
@@ -76,6 +77,12 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("tts.supertonic section required when provider = \"supertonic\""))?;
             tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
             Arc::new(SupertonicEngine::new(st_cfg))
+        }
+        "openai" => {
+            let oa_cfg = config.tts.get_openai_config()
+                .ok_or_else(|| anyhow::anyhow!("tts.openai section required when provider = \"openai\""))?;
+            tracing::info!(url = %oa_cfg.api_url, model = %oa_cfg.model, "using OpenAI-compatible engine");
+            Arc::new(OpenAiEngine::new(oa_cfg))
         }
         _ => {
             tracing::info!("using MsEdge engine");

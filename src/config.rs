@@ -86,6 +86,8 @@ pub struct TtsConfig {
     pub msedge: Vec<HashMap<String, String>>,
     #[serde(default)]
     pub supertonic: Option<Vec<HashMap<String, serde_yaml::Value>>>,
+    #[serde(default)]
+    pub openai: Option<Vec<HashMap<String, serde_yaml::Value>>>,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]
@@ -128,6 +130,19 @@ impl TtsConfig {
                     }
                 }
                 if is_female { "F2".to_string() } else { "M1".to_string() }
+            }
+            "openai" => {
+                if let Some(ref list) = self.openai {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "nova".to_string() } else { "onyx".to_string() }
             }
             _ => {
                 let key = if is_female { "female" } else { "male" };
@@ -175,6 +190,41 @@ impl TtsConfig {
             speed,
         })
     }
+
+    pub fn get_openai_config(&self) -> Option<OpenAiTtsConfig> {
+        let list = self.openai.as_ref()?;
+        let mut api_url = None;
+        let mut api_key = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut model = None;
+
+        for map in list {
+            if let Some(val) = map.get("api_url") {
+                api_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("api_key") {
+                api_key = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("model") {
+                model = val.as_str().map(String::from);
+            }
+        }
+
+        Some(OpenAiTtsConfig {
+            api_url: api_url?,
+            api_key: api_key.unwrap_or_default(),
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            model: model.unwrap_or_else(|| "tts-1".to_string()),
+        })
+    }
 }
 
 fn default_gender() -> String {
@@ -197,6 +247,15 @@ pub struct SupertonicConfig {
     pub lang: String,
     pub steps: Option<u8>,
     pub speed: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OpenAiTtsConfig {
+    pub api_url: String,
+    pub api_key: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub model: String,
 }
 
 impl Config {

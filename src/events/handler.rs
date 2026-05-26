@@ -136,6 +136,28 @@ fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &
                 voice
             }
         }
+        "openai" => {
+            if let Some(ref list) = config.tts.openai {
+                if voice.contains('-') {
+                    let lower = voice.to_lowercase();
+                    let is_male = lower.contains("nam")
+                        || lower.contains("guy")
+                        || lower.contains("male")
+                            && !lower.contains("female");
+                    let key = if is_male { "male" } else { "female" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s;
+                            }
+                        }
+                    }
+                }
+                voice
+            } else {
+                voice
+            }
+        }
         _ => voice,
     }
 }

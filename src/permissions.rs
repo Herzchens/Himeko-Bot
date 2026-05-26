@@ -56,6 +56,7 @@ mod tests {
                     HashMap::from([("en_male".to_string(), "enm".to_string())]),
                 ],
                 supertonic: None,
+                openai: None,
                 default_gender: "female".to_string(),
                 rate: 0,
                 pitch: 0,
