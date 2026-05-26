@@ -61,8 +61,8 @@ tts:
   # Cần chạy: pip install vieneu && python vieneu_server.py
   vieneu:
     - server_url: "http://127.0.0.1:7799"
-    - female: "truc_ly" # Có thể thay bằng đường dẫn file âm thanh wav để clone giọng (ví dụ: "c:/Himeko-Bot/himeko_voice.wav")
-    - male: "nam_phuong"
+    - female: "Ly" # Có thể thay bằng đường dẫn file âm thanh wav để clone giọng (ví dụ: "c:/Himeko-Bot/himeko_voice.wav")
+    - male: "Binh"
     - speed: 1.0
     - autostart: false # Tự động chạy server vieneu khi bot chạy (true | false)
 

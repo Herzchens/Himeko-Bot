@@ -14,7 +14,21 @@ impl Normalizer {
     }
 
     pub fn expand(&self, text: &str) -> String {
-        text.split_whitespace()
+        let mut processed = text.to_string();
+
+        let mut punct_keys: Vec<&String> = self.map.keys()
+            .filter(|k| !k.chars().any(|c| c.is_alphanumeric()))
+            .collect();
+
+        punct_keys.sort_by_key(|a| std::cmp::Reverse(a.len()));
+
+        for k in punct_keys {
+            if let Some(v) = self.map.get(k) {
+                processed = processed.replace(k, &format!(" {} ", v));
+            }
+        }
+
+        processed.split_whitespace()
             .map(|word| {
                 let lower_full = word.to_lowercase();
                 if let Some(expanded) = self.map.get(&lower_full) {
@@ -89,6 +103,22 @@ mod tests {
     fn expands_basic_abbreviation() {
         let n = make_normalizer();
         assert_eq!(n.expand("ko dc"), "không được");
+    }
+
+    #[test]
+    fn expands_punctuation_abbreviation() {
+        let mut map = HashMap::new();
+        map.insert(":)))".to_string(), "mặt cười".to_string());
+        let n = Normalizer::from_config(&map);
+        assert_eq!(n.expand("hello :)))"), "hello mặt cười");
+    }
+
+    #[test]
+    fn expands_punctuation_abbreviation_without_spaces() {
+        let mut map = HashMap::new();
+        map.insert(":)))".to_string(), "mặt cười".to_string());
+        let n = Normalizer::from_config(&map);
+        assert_eq!(n.expand("chứ:)))"), "chứ mặt cười");
     }
 
     #[test]

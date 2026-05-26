@@ -1,6 +1,7 @@
 import os
 import io
 import sys
+import argparse
 
 # Ensure dependencies can be imported
 try:
@@ -9,9 +10,15 @@ try:
     from pydantic import BaseModel
     import uvicorn
     import soundfile as sf
+    import numpy as np
 except ImportError as e:
-    print(f"Missing dependency: {e}. Please run: pip install fastapi uvicorn soundfile")
+    print(f"Missing dependency: {e}. Please run: pip install fastapi uvicorn soundfile numpy")
     sys.exit(1)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", default="turbo", help="VieNeu-TTS mode: standard | turbo | fast | remote | xpu")
+parser.add_argument("--port", type=int, default=7799, help="Port to listen on")
+args, _ = parser.parse_known_args()
 
 app = FastAPI()
 tts = None
@@ -19,8 +26,8 @@ voice_cache = {}
 
 try:
     from vieneu import Vieneu
-    print("Initializing VieNeu-TTS engine (this may download models on first run)...")
-    tts = Vieneu()
+    print(f"Initializing VieNeu-TTS engine in mode: {args.mode}...")
+    tts = Vieneu(mode=args.mode)
     print("📢 VieNeu-TTS initialized successfully.")
     try:
         voices = tts.list_preset_voices()
@@ -32,12 +39,11 @@ try:
 except Exception as e:
     print(f"❌ Failed to load VieNeu-TTS: {e}")
 
-import numpy as np
-
 class TtsRequest(BaseModel):
     text: str
     voice: str
     speed: float = 1.0
+    temperature: float = 0.3  # Lower temperature for stable intonation
 
 def load_custom_voice(voice_path: str):
     if voice_path not in voice_cache:
@@ -56,6 +62,18 @@ def get_voice_data(voice_name: str):
         raise ValueError("VieNeu-TTS engine is not initialized.")
     if os.path.isfile(voice_name):
         return load_custom_voice(voice_name)
+        
+    # Case-insensitive preset matching with fallback mapping (e.g. truc_ly -> Ly)
+    v_name_lower = voice_name.lower().strip()
+    try:
+        presets = tts.list_preset_voices()
+        for _, v_id in presets:
+            v_id_lower = v_id.lower()
+            if v_id_lower == v_name_lower or v_id_lower in v_name_lower or v_name_lower in v_id_lower:
+                return tts.get_preset_voice(v_id)
+    except Exception as e:
+        print(f"Failed to check presets: {e}")
+        
     try:
         return tts.get_preset_voice(voice_name)
     except Exception as e:
@@ -75,7 +93,7 @@ async def tts_endpoint(req: TtsRequest):
         raise HTTPException(status_code=500, detail="VieNeu-TTS engine is not initialized.")
     try:
         voice_data = get_voice_data(req.voice)
-        audio = tts.infer(req.text, voice=voice_data)
+        audio = tts.infer(req.text, voice=voice_data, temperature=req.temperature)
         audio = change_speed(audio, req.speed)
         
         sample_rate = getattr(tts, "sample_rate", 24000)
@@ -88,4 +106,4 @@ async def tts_endpoint(req: TtsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=7799)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
