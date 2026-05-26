@@ -24,8 +24,22 @@ fn start_vieneu_server(port: u16, mode: &str, device: &str) {
         return;
     }
 
-    tracing::info!(port, mode, device, "Starting VieNeu-TTS server...");
-    let result = std::process::Command::new("python")
+    let mut python_cmd = "python".to_string();
+    if std::path::Path::new("venv/Scripts/python.exe").exists() {
+        python_cmd = "venv/Scripts/python.exe".to_string();
+    } else if std::path::Path::new("venv/bin/python").exists() {
+        python_cmd = "venv/bin/python".to_string();
+    }
+
+    tracing::info!(port, mode, device, python = %python_cmd, "Starting VieNeu-TTS server...");
+    let log_file = std::fs::File::create("vieneu_server.log")
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(|_| std::process::Stdio::null());
+    let log_file_err = std::fs::File::create("vieneu_server_err.log")
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(|_| std::process::Stdio::null());
+
+    let result = std::process::Command::new(python_cmd)
         .args([
             "vieneu_server.py",
             "--port",
@@ -35,8 +49,8 @@ fn start_vieneu_server(port: u16, mode: &str, device: &str) {
             "--device",
             device,
         ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(log_file)
+        .stderr(log_file_err)
         .spawn();
 
     match result {
