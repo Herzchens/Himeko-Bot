@@ -13,7 +13,7 @@ pub struct VoiceSession {
 #[derive(Clone, Default)]
 pub struct BotState {
     sessions: Arc<DashMap<GuildId, VoiceSession>>,
-    gender: Arc<DashMap<GuildId, bool>>,
+    gender: Arc<DashMap<UserId, bool>>,
     queue_locks: Arc<DashMap<GuildId, Arc<tokio::sync::Mutex<()>>>>,
 }
 
@@ -34,12 +34,12 @@ impl BotState {
         self.sessions.remove(&guild_id);
     }
 
-    pub fn is_female(&self, guild_id: GuildId) -> bool {
-        self.gender.get(&guild_id).map(|r| *r).unwrap_or(true)
+    pub fn is_female(&self, user_id: UserId) -> bool {
+        self.gender.get(&user_id).map(|r| *r).unwrap_or(true)
     }
 
-    pub fn set_gender(&self, guild_id: GuildId, female: bool) {
-        self.gender.insert(guild_id, female);
+    pub fn set_gender(&self, user_id: UserId, female: bool) {
+        self.gender.insert(user_id, female);
     }
 
     pub fn get_queue_lock(&self, guild_id: GuildId) -> Arc<tokio::sync::Mutex<()>> {

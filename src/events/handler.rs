@@ -189,7 +189,7 @@ pub async fn handle_message(
     };
 
     let is_english = detect_language(&text_to_speak.trim().to_lowercase(), &text_to_speak, &data.language_detector);
-    let is_female = data.state.is_female(guild_id);
+    let is_female = data.state.is_female(msg.author.id);
     let voice = select_voice(&config, is_english, is_female);
 
     let tts_engine = data.tts_engine.read().await;

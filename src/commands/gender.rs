@@ -33,10 +33,11 @@ pub async fn gender(
         return Ok(());
     }
 
-    let guild_id = ctx.guild_id().ok_or("command must be used in a guild")?;
+    let guild_id = ctx.guild_id().unwrap_or(serenity::model::id::GuildId::new(1));
+    let user_id = ctx.author().id;
     let is_female = matches!(voice, GenderChoice::Female);
 
-    state.set_gender(guild_id, is_female);
+    state.set_gender(user_id, is_female);
 
     let (emoji, voice_label) = if is_female {
         ("👩", "female")
