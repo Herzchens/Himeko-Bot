@@ -202,7 +202,7 @@ pub async fn handle_message(
         None => return,
     };
 
-    let config = data.config.read().await;
+    let config = data.config.read().await.clone();
     let user_level = UserLevel::of(msg.author.id.get(), &config);
     if !user_level.can_use_tts() || data.state.is_idle(guild_id) {
         return;
@@ -220,14 +220,14 @@ pub async fn handle_message(
         return;
     }
 
-    let normalizer = data.normalizer.read().await;
+    let normalizer = data.normalizer.read().await.clone();
     let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
     if processed.is_empty() {
         return;
     }
 
-    let text_to_speak = if config.tts.max_chars > 0 && processed.len() > config.tts.max_chars {
-        processed[..config.tts.max_chars].to_string()
+    let text_to_speak = if config.tts.max_chars > 0 && processed.chars().count() > config.tts.max_chars {
+        processed.chars().take(config.tts.max_chars).collect::<String>()
     } else {
         processed
     };
@@ -236,10 +236,7 @@ pub async fn handle_message(
     let is_female = data.state.is_female(msg.author.id);
     let voice = select_voice(&config, is_english, is_female);
 
-    let tts_engine = data.tts_engine.read().await;
-    
-    let queue_lock = data.state.get_queue_lock(guild_id);
-    let _guard = queue_lock.lock().await;
+    let tts_engine = data.tts_engine.read().await.clone();
 
     let start_time = std::time::Instant::now();
     let audio_bytes = match tts_engine.synthesize(&text_to_speak, &voice).await {
@@ -268,6 +265,8 @@ pub async fn handle_message(
         return;
     }
 
+    let queue_lock = data.state.get_queue_lock(guild_id);
+    let _guard = queue_lock.lock().await;
     if let Some(handler_lock) = manager.get(guild_id) {
         let input = songbird::input::Input::from(audio_bytes);
         let mut handler = handler_lock.lock().await;

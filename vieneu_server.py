@@ -22,7 +22,7 @@ try:
     elif args.mode in ("fast", "gpu"):
         kwargs["backbone_device"] = args.device
         kwargs["codec_device"] = "cpu"  # Always keep codec on CPU to bypass massive Windows CUDA decoding lag
-        kwargs["memory_util"] = 0.01    # Limit KV Cache pre-allocation to 1% to save gigabytes of VRAM
+        kwargs["memory_util"] = 0.05    # Limit KV Cache to 5% VRAM — enough for short TTS, saves gigabytes
     elif args.mode == "remote":
         kwargs["codec_device"] = args.device
     else:
@@ -53,16 +53,35 @@ except ImportError as e:
     sys.exit(1)
 
 app = FastAPI()
-voice_cache = {}
+custom_voice_cache = {}
+preset_voice_cache = {}
+preset_name_map = {}
+
+def init_preset_cache():
+    if tts is None:
+        return
+    try:
+        presets = tts.list_preset_voices()
+        for item in presets:
+            desc, v_id = item if isinstance(item, tuple) else (item, item)
+            data = tts.get_preset_voice(v_id)
+            preset_voice_cache[v_id.lower()] = data
+            preset_name_map[v_id.lower()] = v_id
+            preset_name_map[desc.lower()] = v_id
+        print(f"📦 Cached {len(preset_voice_cache)} preset voices at startup", flush=True)
+    except Exception as e:
+        print(f"Warning: Failed to cache preset voices: {e}", flush=True)
+
+init_preset_cache()
 
 class TtsRequest(BaseModel):
     text: str
     voice: str
     speed: float = 1.0
-    temperature: float = 0.3  # Lower temperature for stable intonation
+    temperature: float = 0.3
 
 def load_custom_voice(voice_path: str):
-    if voice_path not in voice_cache:
+    if voice_path not in custom_voice_cache:
         base, _ = os.path.splitext(voice_path)
         txt_path = base + ".txt"
         if not os.path.isfile(txt_path):
@@ -70,37 +89,29 @@ def load_custom_voice(voice_path: str):
         with open(txt_path, "r", encoding="utf-8") as f:
             ref_text = f.read().strip()
         ref_codes = tts.encode_reference(voice_path)
-        voice_cache[voice_path] = {"codes": ref_codes, "text": ref_text}
-    return voice_cache[voice_path]
+        custom_voice_cache[voice_path] = {"codes": ref_codes, "text": ref_text}
+    return custom_voice_cache[voice_path]
 
 def get_voice_data(voice_name: str):
     if tts is None:
         raise ValueError("VieNeu-TTS engine is not initialized.")
     if os.path.isfile(voice_name):
         return load_custom_voice(voice_name)
-        
-    v_name_lower = voice_name.lower().strip()
-    try:
-        presets = tts.list_preset_voices()
-        for item in presets:
-            desc, v_id = item if isinstance(item, tuple) else (item, item)
-            v_id_lower = v_id.lower()
-            desc_lower = desc.lower()
-            if v_id_lower == v_name_lower or v_id_lower in v_name_lower or v_name_lower in v_id_lower or v_name_lower in desc_lower:
-                return tts.get_preset_voice(v_id)
-                
-        # Fallback to the first available preset voice
-        first_id = presets[0][1] if isinstance(presets[0], tuple) else presets[0]
-        print(f"Warning: Voice '{voice_name}' not found, falling back to first preset: '{first_id}'")
-        return tts.get_preset_voice(first_id)
-    except Exception as e:
-        print(f"Failed to match preset voice: {e}")
-        
-    try:
-        return tts.get_preset_voice(voice_name)
-    except Exception as e:
-        print(f"Preset voice {voice_name} not found, using default: {e}")
-        return tts.get_preset_voice(None)
+
+    key = voice_name.lower().strip()
+    if key in preset_voice_cache:
+        return preset_voice_cache[key]
+
+    for alias, v_id in preset_name_map.items():
+        if alias == key or key in alias or alias in key:
+            return preset_voice_cache[v_id.lower()]
+
+    if preset_voice_cache:
+        first_key = next(iter(preset_voice_cache))
+        print(f"Warning: Voice '{voice_name}' not found, using fallback: '{first_key}'", flush=True)
+        return preset_voice_cache[first_key]
+
+    return tts.get_preset_voice(voice_name)
 
 def change_speed(audio, speed: float):
     if speed == 1.0 or speed <= 0:

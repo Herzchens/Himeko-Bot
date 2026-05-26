@@ -112,47 +112,42 @@ impl TtsEngine for VieneuEngine {
             "temperature": self.config.temperature.unwrap_or(0.3),
         });
 
-        let mut attempts = 0;
-        let max_attempts = 3;
+        let timeout = std::time::Duration::from_secs(5);
+        let max_attempts = 2;
 
-        loop {
-            attempts += 1;
-            match self.client.post(&url).json(&payload).send().await {
+        for attempt in 1..=max_attempts {
+            match self.client.post(&url).json(&payload).timeout(timeout).send().await {
+                Ok(response) if response.status().is_success() => {
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            tracing::debug!(
+                                text_len = text.len(),
+                                audio_len = bytes.len(),
+                                "VieNeu-TTS synthesis complete"
+                            );
+                            return Ok(bytes.to_vec());
+                        }
+                        Err(e) if attempt < max_attempts => {
+                            tracing::warn!("VieNeu-TTS read failed (attempt {attempt}/{max_attempts}): {e}");
+                        }
+                        Err(e) => anyhow::bail!("VieNeu-TTS failed to read bytes: {e}"),
+                    }
+                }
                 Ok(response) => {
-                    if response.status().is_success() {
-                        match response.bytes().await {
-                            Ok(bytes) => {
-                                tracing::debug!(
-                                    text_len = text.len(),
-                                    audio_len = bytes.len(),
-                                    "VieNeu-TTS synthesis complete"
-                                );
-                                return Ok(bytes.to_vec());
-                            }
-                            Err(e) => {
-                                if attempts >= max_attempts {
-                                    anyhow::bail!("VieNeu-TTS failed to read bytes: {e}");
-                                }
-                                tracing::warn!("VieNeu-TTS read failed (attempt {attempts}/{max_attempts}): {e}");
-                            }
-                        }
-                    } else {
-                        let status = response.status();
-                        let body = response.text().await.unwrap_or_default();
-                        if attempts >= max_attempts {
-                            anyhow::bail!("VieNeu-TTS returned {status}: {body}");
-                        }
-                        tracing::warn!("VieNeu-TTS status error (attempt {attempts}/{max_attempts}): {status}");
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    if attempt >= max_attempts {
+                        anyhow::bail!("VieNeu-TTS returned {status}: {body}");
                     }
+                    tracing::warn!("VieNeu-TTS status error (attempt {attempt}/{max_attempts}): {status}");
                 }
-                Err(e) => {
-                    if attempts >= max_attempts {
-                        anyhow::bail!("VieNeu-TTS request failed after {attempts} attempts: {e}");
-                    }
-                    tracing::warn!("VieNeu-TTS request failed (attempt {attempts}/{max_attempts}): {e}. Retrying in 500ms...");
+                Err(e) if attempt < max_attempts => {
+                    tracing::warn!("VieNeu-TTS request failed (attempt {attempt}/{max_attempts}): {e}");
                 }
+                Err(e) => anyhow::bail!("VieNeu-TTS request failed: {e}"),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+        anyhow::bail!("VieNeu-TTS: unreachable")
     }
 }

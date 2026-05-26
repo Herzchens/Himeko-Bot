@@ -109,47 +109,42 @@ impl TtsEngine for SupertonicEngine {
     async fn synthesize(&self, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
         let url = format!("{}/v1/tts", self.config.server_url.trim_end_matches('/'));
         let payload = self.build_payload(text, voice);
-        let mut attempts = 0;
-        let max_attempts = 3;
+        let timeout = std::time::Duration::from_secs(5);
+        let max_attempts = 2;
 
-        loop {
-            attempts += 1;
-            match self.client.post(&url).json(&payload).send().await {
+        for attempt in 1..=max_attempts {
+            match self.client.post(&url).json(&payload).timeout(timeout).send().await {
+                Ok(response) if response.status().is_success() => {
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            tracing::debug!(
+                                text_len = text.len(),
+                                audio_len = bytes.len(),
+                                "Supertonic synthesis complete"
+                            );
+                            return Ok(bytes.to_vec());
+                        }
+                        Err(e) if attempt < max_attempts => {
+                            tracing::warn!("Supertonic read failed (attempt {attempt}/{max_attempts}): {e}");
+                        }
+                        Err(e) => anyhow::bail!("Supertonic failed to read bytes: {e}"),
+                    }
+                }
                 Ok(response) => {
-                    if response.status().is_success() {
-                        match response.bytes().await {
-                            Ok(bytes) => {
-                                tracing::debug!(
-                                    text_len = text.len(),
-                                    audio_len = bytes.len(),
-                                    "Supertonic synthesis complete"
-                                );
-                                return Ok(bytes.to_vec());
-                            }
-                            Err(e) => {
-                                if attempts >= max_attempts {
-                                    anyhow::bail!("Supertonic failed to read bytes: {e}");
-                                }
-                                tracing::warn!("Supertonic read failed (attempt {attempts}/{max_attempts}): {e}");
-                            }
-                        }
-                    } else {
-                        let status = response.status();
-                        let body = response.text().await.unwrap_or_default();
-                        if attempts >= max_attempts {
-                            anyhow::bail!("Supertonic returned {status}: {body}");
-                        }
-                        tracing::warn!("Supertonic status error (attempt {attempts}/{max_attempts}): {status}");
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    if attempt >= max_attempts {
+                        anyhow::bail!("Supertonic returned {status}: {body}");
                     }
+                    tracing::warn!("Supertonic status error (attempt {attempt}/{max_attempts}): {status}");
                 }
-                Err(e) => {
-                    if attempts >= max_attempts {
-                        anyhow::bail!("Supertonic request failed after {attempts} attempts: {e}");
-                    }
-                    tracing::warn!("Supertonic request failed (attempt {attempts}/{max_attempts}): {e}. Retrying in 500ms...");
+                Err(e) if attempt < max_attempts => {
+                    tracing::warn!("Supertonic request failed (attempt {attempt}/{max_attempts}): {e}");
                 }
+                Err(e) => anyhow::bail!("Supertonic request failed: {e}"),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+        anyhow::bail!("Supertonic: unreachable")
     }
 }
