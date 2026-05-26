@@ -91,13 +91,52 @@ fn select_voice(
     config: &crate::config::Config,
     is_english: bool,
     is_female: bool,
-) -> &str {
+) -> String {
     if is_english {
-        if is_female { &config.tts.voice_en_female } else { &config.tts.voice_en_male }
+        if is_female {
+            config.tts.get_msedge_voice("en_female")
+        } else {
+            config.tts.get_msedge_voice("en_male")
+        }
     } else if is_female {
-        &config.tts.voice_female
+        config.tts.get_msedge_voice("female")
     } else {
-        &config.tts.voice_male
+        config.tts.get_msedge_voice("male")
+    }
+}
+
+fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &'a str {
+    match config.tts.provider.as_str() {
+        "gtts" => {
+            if voice.starts_with("en-") || voice == "en" {
+                "en"
+            } else {
+                "vi"
+            }
+        }
+        "supertonic" => {
+            if let Some(ref list) = config.tts.supertonic {
+                if voice.contains('-') {
+                    let lower = voice.to_lowercase();
+                    let is_male = lower.contains("nam")
+                        || lower.contains("guy")
+                        || lower.contains("male")
+                            && !lower.contains("female");
+                    let key = if is_male { "male" } else { "female" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s;
+                            }
+                        }
+                    }
+                }
+                voice
+            } else {
+                voice
+            }
+        }
+        _ => voice,
     }
 }
 
@@ -158,7 +197,7 @@ pub async fn handle_message(
     let queue_lock = data.state.get_queue_lock(guild_id);
     let _guard = queue_lock.lock().await;
 
-    let audio_bytes = match tts_engine.synthesize(&text_to_speak, voice).await {
+    let audio_bytes = match tts_engine.synthesize(&text_to_speak, &voice).await {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::warn!(guild = %guild_id, user = %msg.author.id, error = %e, "TTS synthesis failed");
@@ -166,7 +205,16 @@ pub async fn handle_message(
         }
     };
 
-    tracing::info!(guild = %guild_id, user = %msg.author.id, chars = text_to_speak.len(), voice = %voice, audio_bytes = audio_bytes.len(), "TTS synthesized");
+    let log_voice = resolve_log_voice(&config, &voice);
+    tracing::info!(
+        guild = %guild_id,
+        user = %msg.author.id,
+        provider = %config.tts.provider,
+        chars = text_to_speak.len(),
+        voice = %log_voice,
+        audio_bytes = audio_bytes.len(),
+        "TTS synthesized"
+    );
 
     if audio_bytes.is_empty() {
         tracing::error!("TTS engine returned 0 bytes! (Check if the voice name is correct or if text is empty)");
@@ -177,6 +225,52 @@ pub async fn handle_message(
         let input = songbird::input::Input::from(audio_bytes);
         let mut handler = handler_lock.lock().await;
         handler.enqueue_input(input).await;
+    }
+}
+
+async fn attempt_rejoin(
+    ctx: &serenity::client::Context,
+    guild_id: serenity::model::id::GuildId,
+    channel_id: serenity::model::id::ChannelId,
+    data: &Data,
+) {
+    let manager = match songbird::get(ctx).await {
+        Some(m) => m,
+        None => return,
+    };
+
+    for attempt in 1..=3u32 {
+        let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+        tokio::time::sleep(delay).await;
+
+        match manager.join(guild_id, channel_id).await {
+            Ok(_) => {
+                tracing::info!(guild = %guild_id, channel = %channel_id, attempt, "auto-rejoin succeeded");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(guild = %guild_id, attempt, error = %e, "auto-rejoin failed");
+            }
+        }
+    }
+
+    tracing::error!(guild = %guild_id, "auto-rejoin exhausted all attempts, clearing session");
+    data.state.clear_session(guild_id);
+}
+
+async fn handle_voice_state_update(
+    ctx: &serenity::client::Context,
+    new: &serenity::model::voice::VoiceState,
+    data: &Data,
+) {
+    let bot_id = ctx.cache.current_user().id;
+    if new.user_id == bot_id && new.channel_id.is_none() {
+        if let Some(guild_id) = new.guild_id {
+            if let Some(session) = data.state.get_session(guild_id) {
+                tracing::warn!(guild = %guild_id, "bot disconnected from voice, attempting rejoin");
+                attempt_rejoin(ctx, guild_id, session.channel_id, data).await;
+            }
+        }
     }
 }
 
@@ -198,6 +292,9 @@ pub async fn event_handler(
             crate::events::member_update::handle_member_update(
                 ctx, old_if_available, new, event_data, data,
             ).await;
+        }
+        FullEvent::VoiceStateUpdate { new, .. } => {
+            handle_voice_state_update(ctx, new, data).await;
         }
         _ => {}
     }

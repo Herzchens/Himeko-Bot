@@ -83,6 +83,7 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
         VoiceSession {
             owner: ctx.author().id,
             owner_level: level,
+            channel_id,
         },
     );
 

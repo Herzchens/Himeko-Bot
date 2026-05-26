@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub struct VoiceSession {
     pub owner: UserId,
     pub owner_level: UserLevel,
+    pub channel_id: serenity::model::id::ChannelId,
 }
 
 #[derive(Clone, Default)]
