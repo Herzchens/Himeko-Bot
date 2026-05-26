@@ -57,6 +57,7 @@ mod tests {
                 ],
                 supertonic: None,
                 openai: None,
+                vieneu: None,
                 default_gender: "female".to_string(),
                 rate: 0,
                 pitch: 0,

@@ -88,6 +88,8 @@ pub struct TtsConfig {
     pub supertonic: Option<Vec<HashMap<String, serde_yaml::Value>>>,
     #[serde(default)]
     pub openai: Option<Vec<HashMap<String, serde_yaml::Value>>>,
+    #[serde(default)]
+    pub vieneu: Option<Vec<HashMap<String, serde_yaml::Value>>>,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]
@@ -143,6 +145,19 @@ impl TtsConfig {
                     }
                 }
                 if is_female { "nova".to_string() } else { "onyx".to_string() }
+            }
+            "vieneu" => {
+                if let Some(ref list) = self.vieneu {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "truc_ly".to_string() } else { "nam_phuong".to_string() }
             }
             _ => {
                 let key = if is_female { "female" } else { "male" };
@@ -225,6 +240,36 @@ impl TtsConfig {
             model: model.unwrap_or_else(|| "tts-1".to_string()),
         })
     }
+
+    pub fn get_vieneu_config(&self) -> Option<VieneuConfig> {
+        let list = self.vieneu.as_ref()?;
+        let mut server_url = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut speed = None;
+
+        for map in list {
+            if let Some(val) = map.get("server_url") {
+                server_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("speed") {
+                speed = val.as_f64().map(|v| v as f32);
+            }
+        }
+
+        Some(VieneuConfig {
+            server_url: server_url?,
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            speed,
+        })
+    }
 }
 
 fn default_gender() -> String {
@@ -237,6 +282,14 @@ fn default_provider() -> String {
 
 fn default_audio_format() -> String {
     "audio-24khz-48kbitrate-mono-mp3".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct VieneuConfig {
+    pub server_url: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub speed: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

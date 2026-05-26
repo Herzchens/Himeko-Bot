@@ -5,6 +5,7 @@ use crate::tts::engine::MsEdgeEngine;
 use crate::tts::gtts::GttsEngine;
 use crate::tts::supertonic::SupertonicEngine;
 use crate::tts::openai::OpenAiEngine;
+use crate::tts::vieneu::VieneuEngine;
 use crate::tts::TtsEngine;
 use crate::Data;
 use poise::CreateReply;
@@ -65,6 +66,22 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
                             ctx.send(
                                 CreateReply::default()
                                     .content("❌ Config thiếu section [tts.openai] khi provider = \"openai\"")
+                                    .ephemeral(true),
+                            ).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                "vieneu" => {
+                    match new_config.tts.get_vieneu_config() {
+                        Some(vn_cfg) => {
+                            tracing::info!(server = %vn_cfg.server_url, "using VieNeu-TTS engine");
+                            Arc::new(VieneuEngine::new(vn_cfg))
+                        }
+                        None => {
+                            ctx.send(
+                                CreateReply::default()
+                                    .content("❌ Config thiếu section [tts.vieneu] khi provider = \"vieneu\"")
                                     .ephemeral(true),
                             ).await?;
                             return Ok(());

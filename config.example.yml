@@ -56,6 +56,14 @@ tts:
     - male: "vi-male"
     - model: "tts-1"
 
+  # --- VieNeu-TTS config (TTS local CPU-optimized server) ---
+  # Cần chạy: pip install vieneu && python vieneu_server.py
+  vieneu:
+    - server_url: "http://127.0.0.1:7799"
+    - female: "truc_ly" # Có thể thay bằng đường dẫn file âm thanh wav để clone giọng (ví dụ: "c:/Himeko-Bot/himeko_voice.wav")
+    - male: "nam_phuong"
+    - speed: 1.0
+
 abbreviations:
   # Từ viết tắt:
   ko: "không"
