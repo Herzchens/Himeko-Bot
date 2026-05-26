@@ -14,6 +14,7 @@ use std::sync::Arc;
 use text::normalizer::Normalizer;
 use tts::engine::MsEdgeEngine;
 use tts::gtts::GttsEngine;
+use tts::supertonic::SupertonicEngine;
 use tts::TtsEngine;
 use tokio::sync::RwLock;
 
@@ -65,12 +66,21 @@ async fn main() -> anyhow::Result<()> {
         "normalizer loaded"
     );
 
-    let tts_engine: Arc<dyn TtsEngine> = if config.tts.provider == "gtts" {
-        tracing::info!("using gTTS engine");
-        Arc::new(GttsEngine::new())
-    } else {
-        tracing::info!("using MsEdge engine");
-        Arc::new(MsEdgeEngine::new(config.tts.clone()))
+    let tts_engine: Arc<dyn TtsEngine> = match config.tts.provider.as_str() {
+        "gtts" => {
+            tracing::info!("using gTTS engine");
+            Arc::new(GttsEngine::new())
+        }
+        "supertonic" => {
+            let st_cfg = config.tts.get_supertonic_config()
+                .ok_or_else(|| anyhow::anyhow!("tts.supertonic section required when provider = \"supertonic\""))?;
+            tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
+            Arc::new(SupertonicEngine::new(st_cfg))
+        }
+        _ => {
+            tracing::info!("using MsEdge engine");
+            Arc::new(MsEdgeEngine::new(config.tts.clone()))
+        }
     };
 
     let config_clone = Arc::clone(&config);

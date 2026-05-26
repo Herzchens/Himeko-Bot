@@ -3,6 +3,7 @@ use crate::permissions::UserLevel;
 use crate::text::normalizer::Normalizer;
 use crate::tts::engine::MsEdgeEngine;
 use crate::tts::gtts::GttsEngine;
+use crate::tts::supertonic::SupertonicEngine;
 use crate::tts::TtsEngine;
 use crate::Data;
 use poise::CreateReply;
@@ -32,12 +33,31 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
             let new_config = Arc::new(new_config);
             let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));
             
-            let tts_engine: Arc<dyn TtsEngine> = if new_config.tts.provider == "gtts" {
-                tracing::info!("using gTTS engine");
-                Arc::new(GttsEngine::new())
-            } else {
-                tracing::info!("using MsEdge engine");
-                Arc::new(MsEdgeEngine::new(new_config.tts.clone()))
+            let tts_engine: Arc<dyn TtsEngine> = match new_config.tts.provider.as_str() {
+                "gtts" => {
+                    tracing::info!("using gTTS engine");
+                    Arc::new(GttsEngine::new())
+                }
+                "supertonic" => {
+                    match new_config.tts.get_supertonic_config() {
+                        Some(st_cfg) => {
+                            tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
+                            Arc::new(SupertonicEngine::new(st_cfg))
+                        }
+                        None => {
+                            ctx.send(
+                                CreateReply::default()
+                                    .content("❌ Config thiếu section [tts.supertonic] khi provider = \"supertonic\"")
+                                    .ephemeral(true),
+                            ).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => {
+                    tracing::info!("using MsEdge engine");
+                    Arc::new(MsEdgeEngine::new(new_config.tts.clone()))
+                }
             };
 
             *ctx.data().config.write().await = new_config.clone();

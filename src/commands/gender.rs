@@ -38,11 +38,12 @@ pub async fn gender(
 
     state.set_gender(guild_id, is_female);
 
-    let (emoji, voice_label, name) = if is_female {
-        ("👩", "female", &config.tts.voice_female)
+    let (emoji, voice_label) = if is_female {
+        ("👩", "female")
     } else {
-        ("👨", "male", &config.tts.voice_male)
+        ("👨", "male")
     };
+    let name = config.tts.get_active_voice(is_female);
 
     tracing::info!(
         guild = %guild_id,
