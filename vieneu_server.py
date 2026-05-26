@@ -21,7 +21,8 @@ try:
         kwargs["codec_device"] = "cpu"
     elif args.mode in ("fast", "gpu"):
         kwargs["backbone_device"] = args.device
-        kwargs["codec_device"] = args.device
+        kwargs["codec_device"] = "cpu"  # Always keep codec on CPU to bypass massive Windows CUDA decoding lag
+        kwargs["memory_util"] = 0.01    # Limit KV Cache pre-allocation to 1% to save gigabytes of VRAM
     elif args.mode == "remote":
         kwargs["codec_device"] = args.device
     else:
