@@ -18,15 +18,23 @@ fn is_server_running(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
-fn start_vieneu_server(port: u16, mode: &str) {
+fn start_vieneu_server(port: u16, mode: &str, device: &str) {
     if is_server_running(port) {
         tracing::info!(port, "VieNeu-TTS server is already running, skipping launch");
         return;
     }
 
-    tracing::info!(port, mode, "Starting VieNeu-TTS server...");
+    tracing::info!(port, mode, device, "Starting VieNeu-TTS server...");
     let result = std::process::Command::new("python")
-        .args(["vieneu_server.py", "--port", &port.to_string(), "--mode", mode])
+        .args([
+            "vieneu_server.py",
+            "--port",
+            &port.to_string(),
+            "--mode",
+            mode,
+            "--device",
+            device,
+        ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
@@ -49,7 +57,8 @@ impl VieneuEngine {
         if config.autostart {
             if let Some(port) = parse_port(&config.server_url) {
                 let mode = config.mode.as_deref().unwrap_or("turbo");
-                start_vieneu_server(port, mode);
+                let device = config.device.as_deref().unwrap_or("cpu");
+                start_vieneu_server(port, mode, device);
             }
         }
 

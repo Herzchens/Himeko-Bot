@@ -18,6 +18,7 @@ except ImportError as e:
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="turbo", help="VieNeu-TTS mode: standard | turbo | fast | remote | xpu")
 parser.add_argument("--port", type=int, default=7799, help="Port to listen on")
+parser.add_argument("--device", default="cpu", help="Device to run on: cpu | cuda")
 args, _ = parser.parse_known_args()
 
 app = FastAPI()
@@ -26,13 +27,14 @@ voice_cache = {}
 
 try:
     from vieneu import Vieneu
-    print(f"Initializing VieNeu-TTS engine in mode: {args.mode}...")
-    tts = Vieneu(mode=args.mode)
+    print(f"Initializing VieNeu-TTS engine in mode: {args.mode} on device: {args.device}...")
+    tts = Vieneu(mode=args.mode, device=args.device)
     print("📢 VieNeu-TTS initialized successfully.")
     try:
         voices = tts.list_preset_voices()
         print("Available preset voices:")
-        for desc, v_id in voices:
+        for item in voices:
+            desc, v_id = item if isinstance(item, tuple) else (item, item)
             print(f"  • {v_id}: {desc}")
     except Exception as e:
         print(f"Could not list preset voices: {e}")
@@ -63,16 +65,33 @@ def get_voice_data(voice_name: str):
     if os.path.isfile(voice_name):
         return load_custom_voice(voice_name)
         
-    # Case-insensitive preset matching with fallback mapping (e.g. truc_ly -> Ly)
     v_name_lower = voice_name.lower().strip()
     try:
         presets = tts.list_preset_voices()
-        for _, v_id in presets:
+        # First pass: try exact or case-insensitive or description match
+        for item in presets:
+            desc, v_id = item if isinstance(item, tuple) else (item, item)
             v_id_lower = v_id.lower()
-            if v_id_lower == v_name_lower or v_id_lower in v_name_lower or v_name_lower in v_id_lower:
+            desc_lower = desc.lower()
+            if v_id_lower == v_name_lower or v_id_lower in v_name_lower or v_name_lower in v_id_lower or v_name_lower in desc_lower:
                 return tts.get_preset_voice(v_id)
+                
+        # Second pass: gender fallback mapping (e.g. Binh -> male voice, Ly -> female voice)
+        is_male_req = any(kw in v_name_lower for kw in ["nam", "binh", "tuyen", "vinh", "son", "male", "guy"])
+        for item in presets:
+            desc, v_id = item if isinstance(item, tuple) else (item, item)
+            desc_lower = desc.lower()
+            v_id_lower = v_id.lower()
+            if is_male_req and ("nam" in desc_lower or "nam" in v_id_lower):
+                return tts.get_preset_voice(v_id)
+            if not is_male_req and ("nữ" in desc_lower or "nu" in desc_lower or "nữ" in v_id_lower or "nu" in v_id_lower):
+                return tts.get_preset_voice(v_id)
+                
+        # Fallback to the first available preset voice
+        first_id = presets[0][1] if isinstance(presets[0], tuple) else presets[0]
+        return tts.get_preset_voice(first_id)
     except Exception as e:
-        print(f"Failed to check presets: {e}")
+        print(f"Failed to match preset voice: {e}")
         
     try:
         return tts.get_preset_voice(voice_name)

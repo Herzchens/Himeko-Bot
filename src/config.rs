@@ -255,6 +255,7 @@ impl TtsConfig {
         let mut autostart = true;
         let mut mode = None;
         let mut temperature = None;
+        let mut device = None;
 
         for map in list {
             if let Some(val) = map.get("server_url") {
@@ -278,6 +279,9 @@ impl TtsConfig {
             if let Some(val) = map.get("temperature") {
                 temperature = val.as_f64().map(|v| v as f32);
             }
+            if let Some(val) = map.get("device") {
+                device = val.as_str().map(String::from);
+            }
         }
 
         Some(VieneuConfig {
@@ -288,6 +292,7 @@ impl TtsConfig {
             autostart,
             mode,
             temperature,
+            device,
         })
     }
 }
@@ -314,6 +319,7 @@ pub struct VieneuConfig {
     pub autostart: bool,
     pub mode: Option<String>,
     pub temperature: Option<f32>,
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
