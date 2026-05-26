@@ -17,6 +17,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 /// Tải lại file config và cập nhật bot
 #[poise::command(slash_command, guild_only)]
 pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
     let config = ctx.data().config.read().await.clone();
     let level = UserLevel::of(ctx.author().id.get(), &config);
 
