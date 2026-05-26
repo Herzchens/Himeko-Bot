@@ -79,6 +79,7 @@ class TtsRequest(BaseModel):
     voice: str
     speed: float = 1.0
     temperature: float = 0.3
+    pitch: int = 0
 
 def load_custom_voice(voice_path: str):
     if voice_path not in custom_voice_cache:
@@ -120,6 +121,19 @@ def change_speed(audio, speed: float):
     new_indices = np.arange(0, len(audio), speed)
     return np.interp(new_indices, old_indices, audio).astype(np.float32)
 
+def apply_pitch(audio, pitch_pct: int):
+    if pitch_pct == 0:
+        return audio
+    factor = 1.0 + pitch_pct / 100.0
+    old_len = len(audio)
+    new_len = max(1, int(old_len / factor))
+    resampled = np.interp(
+        np.linspace(0, old_len - 1, new_len),
+        np.arange(old_len),
+        audio,
+    ).astype(np.float32)
+    return resampled
+
 @app.post("/v1/tts")
 async def tts_endpoint(req: TtsRequest):
     import time
@@ -143,6 +157,10 @@ async def tts_endpoint(req: TtsRequest):
         t_speed = time.time() - t0
         
         t0 = time.time()
+        audio = apply_pitch(audio, req.pitch)
+        t_pitch = time.time() - t0
+        
+        t0 = time.time()
         sample_rate = getattr(tts, "sample_rate", 24000)
         out_buf = io.BytesIO()
         # Convert float32 array (-1.0 to 1.0) to int16 array (-32768 to 32767) for native WAV writing
@@ -156,7 +174,7 @@ async def tts_endpoint(req: TtsRequest):
         t_wav = time.time() - t0
         
         t_total = time.time() - t_start
-        print(f"⏱️ TTS synthesis timing: text='{req.text}', voice_match={t_voice:.3f}s, infer={t_infer:.3f}s, speed={t_speed:.3f}s, wav_write={t_wav:.3f}s, total={t_total:.3f}s", flush=True)
+        print(f"⏱️ TTS synthesis timing: text='{req.text}', voice_match={t_voice:.3f}s, infer={t_infer:.3f}s, speed={t_speed:.3f}s, pitch={t_pitch:.3f}s, wav_write={t_wav:.3f}s, total={t_total:.3f}s", flush=True)
         
         return Response(content=wav_bytes, media_type="audio/wav")
     except Exception as e:

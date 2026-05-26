@@ -110,6 +110,7 @@ impl TtsEngine for VieneuEngine {
             "voice": voice_name,
             "speed": self.config.speed.unwrap_or(1.0),
             "temperature": self.config.temperature.unwrap_or(0.3),
+            "pitch": self.config.pitch.unwrap_or(0),
         });
 
         let timeout = std::time::Duration::from_secs(5);

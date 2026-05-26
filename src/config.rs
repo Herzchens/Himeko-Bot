@@ -256,6 +256,7 @@ impl TtsConfig {
         let mut mode = None;
         let mut temperature = None;
         let mut device = None;
+        let mut pitch = None;
 
         for map in list {
             if let Some(val) = map.get("server_url") {
@@ -282,6 +283,9 @@ impl TtsConfig {
             if let Some(val) = map.get("device") {
                 device = val.as_str().map(String::from);
             }
+            if let Some(val) = map.get("pitch") {
+                pitch = val.as_i64().map(|v| v as i32);
+            }
         }
 
         Some(VieneuConfig {
@@ -293,6 +297,7 @@ impl TtsConfig {
             mode,
             temperature,
             device,
+            pitch,
         })
     }
 }
@@ -320,6 +325,7 @@ pub struct VieneuConfig {
     pub mode: Option<String>,
     pub temperature: Option<f32>,
     pub device: Option<String>,
+    pub pitch: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
