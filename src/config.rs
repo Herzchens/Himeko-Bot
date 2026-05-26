@@ -79,24 +79,13 @@ pub struct PermissionsConfig {
     pub allowed_users: Vec<u64>,
 }
 
-fn default_voice_en_female() -> String {
-    "en-US-JennyNeural".to_string()
-}
-
-fn default_voice_en_male() -> String {
-    "en-US-GuyNeural".to_string()
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
-    pub voice_female: String,
-    pub voice_male: String,
-    #[serde(default = "default_voice_en_female")]
-    pub voice_en_female: String,
-    #[serde(default = "default_voice_en_male")]
-    pub voice_en_male: String,
+    pub msedge: Vec<HashMap<String, String>>,
+    #[serde(default)]
+    pub supertonic: Option<Vec<HashMap<String, serde_yaml::Value>>>,
     #[serde(default = "default_gender")]
     pub default_gender: String,
     #[serde(default)]
@@ -109,6 +98,85 @@ pub struct TtsConfig {
     pub audio_format: String,
 }
 
+impl TtsConfig {
+    pub fn get_msedge_voice(&self, key: &str) -> String {
+        for map in &self.msedge {
+            if let Some(val) = map.get(key) {
+                return val.clone();
+            }
+        }
+        match key {
+            "female" => "vi-VN-HoaiMyNeural".to_string(),
+            "male" => "vi-VN-NamMinhNeural".to_string(),
+            "en_female" => "en-US-JennyNeural".to_string(),
+            "en_male" => "en-US-GuyNeural".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    pub fn get_active_voice(&self, is_female: bool) -> String {
+        match self.provider.as_str() {
+            "supertonic" => {
+                if let Some(ref list) = self.supertonic {
+                    let key = if is_female { "female" } else { "male" };
+                    for map in list {
+                        if let Some(val) = map.get(key) {
+                            if let Some(s) = val.as_str() {
+                                return s.to_string();
+                            }
+                        }
+                    }
+                }
+                if is_female { "F2".to_string() } else { "M1".to_string() }
+            }
+            _ => {
+                let key = if is_female { "female" } else { "male" };
+                self.get_msedge_voice(key)
+            }
+        }
+    }
+
+    pub fn get_supertonic_config(&self) -> Option<SupertonicConfig> {
+        let list = self.supertonic.as_ref()?;
+        let mut server_url = None;
+        let mut voice_female = None;
+        let mut voice_male = None;
+        let mut lang = None;
+        let mut steps = None;
+        let mut speed = None;
+
+        for map in list {
+            if let Some(val) = map.get("server_url") {
+                server_url = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("female") {
+                voice_female = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("male") {
+                voice_male = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("lang") {
+                lang = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("steps") {
+                steps = val.as_u64().map(|v| v as u8);
+            }
+            if let Some(val) = map.get("speed") {
+                speed = val.as_f64().map(|v| v as f32);
+            }
+        }
+
+        Some(SupertonicConfig {
+            server_url: server_url?,
+            voice_female: voice_female?,
+            voice_male: voice_male?,
+            lang: lang.unwrap_or_else(|| "vi".to_string()),
+            steps,
+            speed,
+        })
+    }
+}
+
 fn default_gender() -> String {
     "female".to_string()
 }
@@ -117,10 +185,18 @@ fn default_provider() -> String {
     "msedge".to_string()
 }
 
-
-
 fn default_audio_format() -> String {
     "audio-24khz-48kbitrate-mono-mp3".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SupertonicConfig {
+    pub server_url: String,
+    pub voice_female: String,
+    pub voice_male: String,
+    pub lang: String,
+    pub steps: Option<u8>,
+    pub speed: Option<f32>,
 }
 
 impl Config {

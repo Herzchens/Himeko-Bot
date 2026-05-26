@@ -49,10 +49,13 @@ mod tests {
             },
             tts: TtsConfig {
                 provider: "msedge".to_string(),
-                voice_female: "f".to_string(),
-                voice_male: "m".to_string(),
-                voice_en_female: "enf".to_string(),
-                voice_en_male: "enm".to_string(),
+                msedge: vec![
+                    HashMap::from([("female".to_string(), "f".to_string())]),
+                    HashMap::from([("male".to_string(), "m".to_string())]),
+                    HashMap::from([("en_female".to_string(), "enf".to_string())]),
+                    HashMap::from([("en_male".to_string(), "enm".to_string())]),
+                ],
+                supertonic: None,
                 default_gender: "female".to_string(),
                 rate: 0,
                 pitch: 0,
