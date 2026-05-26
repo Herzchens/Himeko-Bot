@@ -68,7 +68,7 @@ pub async fn down(
 
         let uid_str = user_id.get().to_string();
 
-        let assessment = helpers::assess_member(&http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
+        let assessment = helpers::assess_member(http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
 
         let user_level = db.users.get(&uid_str).map(|u| u.level).unwrap_or(0);
         let current_nick = member.nick.as_deref().unwrap_or(&member.user.name).to_string();
@@ -87,7 +87,7 @@ pub async fn down(
             let original_name = db.users.remove(&uid_str).map(|u| u.original_name).unwrap_or_else(|| member.user.name.clone());
             expected_nick = original_name;
             if assessment.can_rename {
-                let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;
+                let _ = helpers::apply_nickname(http, guild_id, user_id, &expected_nick).await;
             }
             if member.roles.contains(&RoleId::new(rank_config.target_role_id)) {
                 let _ = guild_id.member(http, user_id).await.unwrap().remove_role(http, RoleId::new(rank_config.target_role_id)).await;
@@ -106,7 +106,7 @@ pub async fn down(
             }
             expected_nick = new_expected_nick;
             if assessment.can_rename {
-                let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;
+                let _ = helpers::apply_nickname(http, guild_id, user_id, &expected_nick).await;
             }
         }
 

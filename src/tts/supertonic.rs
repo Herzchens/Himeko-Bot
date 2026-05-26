@@ -10,7 +10,7 @@ pub struct SupertonicEngine {
 fn parse_port(server_url: &str) -> Option<u16> {
     server_url
         .split(':')
-        .last()
+        .next_back()
         .and_then(|p| p.parse::<u16>().ok())
 }
 

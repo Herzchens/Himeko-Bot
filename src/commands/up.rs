@@ -71,7 +71,7 @@ pub async fn up(
         let uid_str = user_id.get().to_string();
         let current_nick = member.nick.as_deref().unwrap_or(&member.user.name).to_string();
 
-        let assessment = helpers::assess_member(&http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
+        let assessment = helpers::assess_member(http, guild_id, &member, rank_config.target_role_id, bot_user_id).await?;
 
         let user_data = db.users.entry(uid_str).or_insert_with(|| RankUserData {
             level: 0,
@@ -101,7 +101,7 @@ pub async fn up(
         }
 
         if assessment.can_rename && new_level > 0 {
-            let _ = helpers::apply_nickname(&http, guild_id, user_id, &expected_nick).await;
+            let _ = helpers::apply_nickname(http, guild_id, user_id, &expected_nick).await;
         }
 
         let icon = if user_data.level >= max_lvl && new_level == max_lvl {
