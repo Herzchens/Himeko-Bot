@@ -3,32 +3,30 @@ import io
 import sys
 import argparse
 
-# Ensure dependencies can be imported
-try:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import Response
-    from pydantic import BaseModel
-    import uvicorn
-    import soundfile as sf
-    import numpy as np
-except ImportError as e:
-    print(f"Missing dependency: {e}. Please run: pip install fastapi uvicorn soundfile numpy")
-    sys.exit(1)
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="turbo", help="VieNeu-TTS mode: standard | turbo | fast | remote | xpu")
 parser.add_argument("--port", type=int, default=7799, help="Port to listen on")
 parser.add_argument("--device", default="cpu", help="Device to run on: cpu | cuda")
 args, _ = parser.parse_known_args()
+# Clear sys.argv to prevent deep libraries (like lmdeploy/argparse) from parsing unexpected flags and crashing
+sys.argv = [sys.argv[0]]
 
-app = FastAPI()
+# CRITICAL: Import and initialize VieNeu-TTS (CUDA context) FIRST to avoid DLL conflicts with subsequent C++ imports
 tts = None
-voice_cache = {}
-
 try:
     from vieneu import Vieneu
-    print(f"Initializing VieNeu-TTS engine in mode: {args.mode} on device: {args.device}...")
-    tts = Vieneu(mode=args.mode, device=args.device)
+    kwargs = {}
+    if args.mode == "standard":
+        kwargs["backbone_device"] = args.device
+        kwargs["codec_device"] = "cpu"
+    elif args.mode in ("fast", "gpu"):
+        kwargs["backbone_device"] = args.device
+        kwargs["codec_device"] = args.device
+    elif args.mode == "remote":
+        kwargs["codec_device"] = args.device
+    else:
+        kwargs["device"] = args.device
+    tts = Vieneu(mode=args.mode, **kwargs)
     print("📢 VieNeu-TTS initialized successfully.")
     try:
         voices = tts.list_preset_voices()
@@ -40,6 +38,21 @@ try:
         print(f"Could not list preset voices: {e}")
 except Exception as e:
     print(f"❌ Failed to load VieNeu-TTS: {e}")
+
+# Import supplementary web-server dependencies later
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import Response
+    from pydantic import BaseModel
+    import uvicorn
+    import wave
+    import numpy as np
+except ImportError as e:
+    print(f"Missing dependency: {e}. Please run: pip install fastapi uvicorn numpy")
+    sys.exit(1)
+
+app = FastAPI()
+voice_cache = {}
 
 class TtsRequest(BaseModel):
     text: str
@@ -109,7 +122,13 @@ async def tts_endpoint(req: TtsRequest):
         
         sample_rate = getattr(tts, "sample_rate", 24000)
         out_buf = io.BytesIO()
-        sf.write(out_buf, audio, samplerate=sample_rate, format="WAV")
+        # Convert float32 array (-1.0 to 1.0) to int16 array (-32768 to 32767) for native WAV writing
+        audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+        with wave.open(out_buf, "wb") as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)   # 16-bit (2 bytes)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio_int16.tobytes())
         wav_bytes = out_buf.getvalue()
         
         return Response(content=wav_bytes, media_type="audio/wav")
