@@ -5,6 +5,7 @@ use reqwest::Client;
 pub struct VieneuEngine {
     client: Client,
     config: VieneuConfig,
+    child_process: std::sync::Mutex<Option<std::process::Child>>,
 }
 
 fn parse_port(server_url: &str) -> Option<u16> {
@@ -18,10 +19,10 @@ fn is_server_running(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
-fn start_vieneu_server(port: u16, mode: &str, device: &str) {
+fn start_vieneu_server(port: u16, mode: &str, device: &str) -> Option<std::process::Child> {
     if is_server_running(port) {
         tracing::info!(port, "VieNeu-TTS server is already running, skipping launch");
-        return;
+        return None;
     }
 
     let mut python_cmd = "python".to_string();
@@ -39,7 +40,7 @@ fn start_vieneu_server(port: u16, mode: &str, device: &str) {
         .map(std::process::Stdio::from)
         .unwrap_or_else(|_| std::process::Stdio::null());
 
-    let result = std::process::Command::new(python_cmd)
+    match std::process::Command::new(python_cmd)
         .args([
             "vieneu_server.py",
             "--port",
@@ -51,17 +52,18 @@ fn start_vieneu_server(port: u16, mode: &str, device: &str) {
         ])
         .stdout(log_file)
         .stderr(log_file_err)
-        .spawn();
-
-    match result {
-        Ok(_) => {
-            tracing::info!(port, "VieNeu-TTS server spawned successfully");
+        .spawn()
+    {
+        Ok(child) => {
+            tracing::info!(port, pid = child.id(), "VieNeu-TTS server spawned successfully");
+            Some(child)
         }
         Err(e) => {
             tracing::error!(
                 "Failed to start VieNeu-TTS server: {}. Please ensure python is in your PATH and vieneu_server.py is in the root directory.",
                 e
             );
+            None
         }
     }
 }
@@ -83,12 +85,13 @@ fn wait_for_server_ready(port: u16, timeout_secs: u64) {
 
 impl VieneuEngine {
     pub fn new(config: VieneuConfig) -> Self {
+        let mut child = None;
         if config.autostart {
             if let Some(port) = parse_port(&config.server_url) {
                 let mode = config.mode.as_deref().unwrap_or("turbo");
                 let device = config.device.as_deref().unwrap_or("cpu");
-                start_vieneu_server(port, mode, device);
-                if !is_server_running(port) {
+                child = start_vieneu_server(port, mode, device);
+                if child.is_some() && !is_server_running(port) {
                     wait_for_server_ready(port, 120);
                 }
             }
@@ -97,6 +100,7 @@ impl VieneuEngine {
         Self {
             client: Client::new(),
             config,
+            child_process: std::sync::Mutex::new(child),
         }
     }
 
@@ -114,6 +118,20 @@ impl VieneuEngine {
             }
         } else {
             voice
+        }
+    }
+}
+
+impl Drop for VieneuEngine {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.child_process.lock() {
+            if let Some(mut child) = guard.take() {
+                tracing::info!(pid = child.id(), "Killing VieNeu-TTS server process");
+                let _ = child.kill();
+                if let Err(e) = child.wait() {
+                    tracing::warn!("Failed to wait for VieNeu-TTS server process to exit: {e}");
+                }
+            }
         }
     }
 }
