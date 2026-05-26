@@ -122,6 +122,24 @@ tts:
 ```
 When `autostart` is enabled, the bot automatically spawns and manages the VieNeu-TTS server in the background and pipes logs to `vieneu_server.log` and `vieneu_server_err.log`.
 
+### 4. Performance Tuning for Realtime TTS
+
+For low-latency TTS (<2s per message), apply these settings:
+
+| Setting | Recommended | Why |
+|---|---|---|
+| `max_chars` | `120–180` | Longer text = longer inference. 160 is a good balance |
+| `mode` | `"fast"` + `device: "cuda"` | Best quality with Ly/Binh voices. Use `"turbo"` + `"cpu"` only if GPU is busy (gaming) |
+| `memory_util` | `0.05` | Limits LMDeploy KV cache to 5% VRAM — enough for short TTS, saves gigabytes for games |
+| `temperature` | `0.3` | Stable intonation without randomness artifacts |
+
+**Architecture optimizations applied:**
+- TTS synthesis runs **outside** the per-guild queue lock — multiple messages synthesize in parallel
+- Preset voice data is **cached at server startup** — no per-request `list_preset_voices()` calls
+- HTTP requests use a **5s timeout** with max 2 attempts (200ms retry delay) for fail-fast behavior
+- Discord API member fetches are **skipped** in the TTS filter hot path — uses `global_name` directly
+- Config and normalizer `RwLock` guards are **cloned early** (Arc increment) to minimize contention with `/reload`
+
 ---
 
 ## Project Status
