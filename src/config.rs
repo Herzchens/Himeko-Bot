@@ -174,6 +174,7 @@ impl TtsConfig {
         let mut lang = None;
         let mut steps = None;
         let mut speed = None;
+        let mut autostart = true;
 
         for map in list {
             if let Some(val) = map.get("server_url") {
@@ -194,6 +195,9 @@ impl TtsConfig {
             if let Some(val) = map.get("speed") {
                 speed = val.as_f64().map(|v| v as f32);
             }
+            if let Some(val) = map.get("autostart") {
+                autostart = val.as_bool().unwrap_or(true);
+            }
         }
 
         Some(SupertonicConfig {
@@ -203,6 +207,7 @@ impl TtsConfig {
             lang: lang.unwrap_or_else(|| "vi".to_string()),
             steps,
             speed,
+            autostart,
         })
     }
 
@@ -247,6 +252,7 @@ impl TtsConfig {
         let mut voice_female = None;
         let mut voice_male = None;
         let mut speed = None;
+        let mut autostart = true;
 
         for map in list {
             if let Some(val) = map.get("server_url") {
@@ -261,6 +267,9 @@ impl TtsConfig {
             if let Some(val) = map.get("speed") {
                 speed = val.as_f64().map(|v| v as f32);
             }
+            if let Some(val) = map.get("autostart") {
+                autostart = val.as_bool().unwrap_or(true);
+            }
         }
 
         Some(VieneuConfig {
@@ -268,6 +277,7 @@ impl TtsConfig {
             voice_female: voice_female?,
             voice_male: voice_male?,
             speed,
+            autostart,
         })
     }
 }
@@ -290,6 +300,8 @@ pub struct VieneuConfig {
     pub voice_female: String,
     pub voice_male: String,
     pub speed: Option<f32>,
+    #[serde(default = "default_true")]
+    pub autostart: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -300,6 +312,8 @@ pub struct SupertonicConfig {
     pub lang: String,
     pub steps: Option<u8>,
     pub speed: Option<f32>,
+    #[serde(default = "default_true")]
+    pub autostart: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

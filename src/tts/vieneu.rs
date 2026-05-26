@@ -46,8 +46,10 @@ fn start_vieneu_server(port: u16) {
 
 impl VieneuEngine {
     pub fn new(config: VieneuConfig) -> Self {
-        if let Some(port) = parse_port(&config.server_url) {
-            start_vieneu_server(port);
+        if config.autostart {
+            if let Some(port) = parse_port(&config.server_url) {
+                start_vieneu_server(port);
+            }
         }
 
         Self {

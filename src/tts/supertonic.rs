@@ -46,10 +46,12 @@ fn start_supertonic_server(port: u16) {
 
 impl SupertonicEngine {
     pub fn new(config: SupertonicConfig) -> Self {
-        if let Some(port) = parse_port(&config.server_url) {
-            start_supertonic_server(port);
-        } else {
-            tracing::warn!(url = %config.server_url, "Could not parse port from server_url, skipping automatic Supertonic launch");
+        if config.autostart {
+            if let Some(port) = parse_port(&config.server_url) {
+                start_supertonic_server(port);
+            } else {
+                tracing::warn!(url = %config.server_url, "Could not parse port from server_url, skipping automatic Supertonic launch");
+            }
         }
 
         Self {

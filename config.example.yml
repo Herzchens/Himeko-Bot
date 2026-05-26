@@ -47,6 +47,7 @@ tts:
     - lang: "vi"
     - steps: 5
     - speed: 1.05
+    - autostart: false # Tự động chạy server supertonic khi bot chạy (true | false)
 
   # --- OpenAI-compatible config (e.g. VietTTS, F5-TTS, or official OpenAI API) ---
   openai:
@@ -63,6 +64,7 @@ tts:
     - female: "truc_ly" # Có thể thay bằng đường dẫn file âm thanh wav để clone giọng (ví dụ: "c:/Himeko-Bot/himeko_voice.wav")
     - male: "nam_phuong"
     - speed: 1.0
+    - autostart: false # Tự động chạy server vieneu khi bot chạy (true | false)
 
 abbreviations:
   # Từ viết tắt:
