@@ -66,6 +66,21 @@ fn start_vieneu_server(port: u16, mode: &str, device: &str) {
     }
 }
 
+fn wait_for_server_ready(port: u16, timeout_secs: u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let poll_interval = std::time::Duration::from_secs(3);
+
+    tracing::info!(port, timeout_secs, "waiting for VieNeu-TTS server to become ready...");
+    while std::time::Instant::now() < deadline {
+        if is_server_running(port) {
+            tracing::info!(port, "VieNeu-TTS server is now accepting connections");
+            return;
+        }
+        std::thread::sleep(poll_interval);
+    }
+    tracing::warn!(port, timeout_secs, "VieNeu-TTS server did not become ready in time — TTS requests may fail until server finishes loading");
+}
+
 impl VieneuEngine {
     pub fn new(config: VieneuConfig) -> Self {
         if config.autostart {
@@ -73,6 +88,9 @@ impl VieneuEngine {
                 let mode = config.mode.as_deref().unwrap_or("turbo");
                 let device = config.device.as_deref().unwrap_or("cpu");
                 start_vieneu_server(port, mode, device);
+                if !is_server_running(port) {
+                    wait_for_server_ready(port, 120);
+                }
             }
         }
 
