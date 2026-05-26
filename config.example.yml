@@ -65,6 +65,8 @@ tts:
     - male: "Binh"
     - speed: 1.0
     - autostart: false # Tự động chạy server vieneu khi bot chạy (true | false)
+    - mode: "turbo" # Chế độ chạy: "turbo" (CPU nhanh) | "turbo_gpu" (GPU Nvidia nhanh) | "standard" (CPU chuẩn) | "gpu" (GPU Nvidia chuẩn)
+    - temperature: 0.3 # Độ ngẫu nhiên/biến đổi tông giọng (0.3 = ổn định, 0.0 = ngẫu nhiên/tự nhiên hơn)
 
 abbreviations:
   # Từ viết tắt:

@@ -253,6 +253,8 @@ impl TtsConfig {
         let mut voice_male = None;
         let mut speed = None;
         let mut autostart = true;
+        let mut mode = None;
+        let mut temperature = None;
 
         for map in list {
             if let Some(val) = map.get("server_url") {
@@ -270,6 +272,12 @@ impl TtsConfig {
             if let Some(val) = map.get("autostart") {
                 autostart = val.as_bool().unwrap_or(true);
             }
+            if let Some(val) = map.get("mode") {
+                mode = val.as_str().map(String::from);
+            }
+            if let Some(val) = map.get("temperature") {
+                temperature = val.as_f64().map(|v| v as f32);
+            }
         }
 
         Some(VieneuConfig {
@@ -278,6 +286,8 @@ impl TtsConfig {
             voice_male: voice_male?,
             speed,
             autostart,
+            mode,
+            temperature,
         })
     }
 }
@@ -302,6 +312,8 @@ pub struct VieneuConfig {
     pub speed: Option<f32>,
     #[serde(default = "default_true")]
     pub autostart: bool,
+    pub mode: Option<String>,
+    pub temperature: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

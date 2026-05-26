@@ -93,7 +93,10 @@ async def tts_endpoint(req: TtsRequest):
         raise HTTPException(status_code=500, detail="VieNeu-TTS engine is not initialized.")
     try:
         voice_data = get_voice_data(req.voice)
-        audio = tts.infer(req.text, voice=voice_data, temperature=req.temperature)
+        
+        # If temperature is 0, fall back to default randomness (1.0)
+        temp = req.temperature if req.temperature > 1e-5 else 1.0
+        audio = tts.infer(req.text, voice=voice_data, temperature=temp)
         audio = change_speed(audio, req.speed)
         
         sample_rate = getattr(tts, "sample_rate", 24000)
