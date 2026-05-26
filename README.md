@@ -7,14 +7,23 @@
 
 ## Features
 
-- **Text-to-Speech** — Himeko joins your voice channel and reads messages in real time
-- **Bilingual auto-detection** — automatically switches between Vietnamese and English voices without any manual input
-- **AI integration** — ask questions via slash command or `@mention`; supports Google Gemini and Groq as backends
-- **Rank System** — manage member ranks with configurable tiers and star levels
-- **Hot-reload config** — update settings on the fly with `/reload`, no restart needed
-- **Fully config-driven** — voices, provider, language rules, and bot behavior are all controlled via `config.yml`
-- **Make custom valorant matches** - Random map and split player into 2 sides.
-- **And more will be developed, open and issue if you want to request features.**
+- **Advanced Text-to-Speech (TTS) Engine Dispatcher** — Supports multiple backends:
+  - **gTTS** — Standard Google TTS engine
+  - **MsEdge** — Microsoft Edge high-quality neural voices
+  - **Supertonic** — Local/remote Supertonic fast-synthesis engine
+  - **OpenAI-Compatible** — Supports custom OpenAI-compatible TTS APIs (like F5-TTS or viXTTS)
+  - **VieNeu-TTS** — Local state-of-the-art Vietnamese TTS engine with high-quality presets (`Ly`, `Binh`) supporting CPU, CUDA (GPU), and LMDeploy acceleration
+- **Automatic Server Control** — Automatically spawns and monitors background `supertonic` or `vieneu_server.py` subprocesses on configured ports if they are not already running
+- **Comprehensive Emoji Filtering** — Intelligently parses Discord emojis:
+  - **Unicode Emojis** (`😂`, `👍`, etc.) are filtered out dynamically to prevent TTS engines from babbling English Unicode names
+  - **Custom Guild Emojis** (`<:pepe_L:1234...>` or `<a:pepe:1234...>`) are cleanly expanded into their descriptive text names (`pepe L`, `pepe`)
+- **Per-User Voice Gender Selection** — Stores TTS gender preferences per `UserId` dynamically across guilds rather than simple global/guild-wide defaults
+- **Robust Auto-Rejoin** — Automatically detects sudden voice channel disconnections and attempts a reconnect with exponential backoff (1s, 2s, 4s)
+- **Bilingual Auto-Detection** — Automatically switches between Vietnamese and English voices without manual commands
+- **AI Chat Integration** — Supports Gemini and Groq backend AI responses via slash commands or direct bot `@mention`
+- **Rank System** — Automatically manages member nicknames and ranks based on tier/star level configurations
+- **Hot-Reload Support** — Instantly reload settings from `config.yml` on the fly using `/reload`
+- **Custom Valorant Matchmaker** — Random maps and player splitting for standard competitive matches
 ---
 
 ## Commands
@@ -77,6 +86,41 @@ cargo run --release
 ```
 
 See `config.example.yml` for the full configuration helper.
+
+---
+
+## VieNeu-TTS Setup & Acceleration
+
+VieNeu-TTS is a state-of-the-art Vietnamese TTS engine integrated into Himeko Bot. It supports high-quality offline voices (`Ly`, `Binh`) and can be run with GPU (CUDA) acceleration on Windows:
+
+### 1. Automatic Python 3.12 Virtual Environment Setup
+Since Windows environments can have conflicts with global Python versions (e.g. 3.13 or 3.14), you should set up a local Python 3.12 environment using Scoop:
+```powershell
+# Set up a local Python 3.12 virtual environment and install dependencies
+.\setup_venv.ps1
+```
+
+### 2. Enabling GPU (CUDA) Acceleration (Optional but Recommended)
+For ultra-fast, high-quality synthesis, install the PyTorch + CUDA package inside the virtual environment:
+```powershell
+.\venv\Scripts\python.exe -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+```
+
+### 3. Running & Configuration
+Set the TTS provider to `"vieneu"` in your `config.yml`:
+```yaml
+tts:
+  provider: "vieneu"
+  vieneu:
+    - server_url: "http://127.0.0.1:7799"
+      voice_female: "Ly"
+      voice_male: "Binh"
+      autostart: true  # Automatically starts vieneu_server.py in the background
+      device: "cuda"   # "cpu" | "cuda"
+      mode: "fast"     # "turbo" (CPU) | "fast" (LMDeploy GPU accelerated)
+      temperature: 0.3 # 0.3 for stable intonation, 0.0 for natural randomness
+```
+When `autostart` is enabled, the bot automatically spawns and manages the VieNeu-TTS server in the background and pipes logs to `vieneu_server.log` and `vieneu_server_err.log`.
 
 ---
 
