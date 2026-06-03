@@ -24,7 +24,7 @@ use serenity::prelude::GatewayIntents;
 use songbird::SerenityInit;
 
 pub struct Data {
-    pub config: RwLock<Arc<Config>>,
+    pub config: Arc<RwLock<Arc<Config>>>,
     pub state: BotState,
     pub normalizer: RwLock<Arc<Normalizer>>,
     pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::remove::remove(),
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
+                commands::rescan::rescan(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
@@ -131,8 +132,69 @@ async fn main() -> anyhow::Result<()> {
                     commands = framework.options().commands.len(),
                     "slash commands registered in guilds (instant update)"
                 );
+                let config_rwlock = Arc::new(RwLock::new(config_clone.clone()));
+
+                let config_for_task = config_rwlock.clone();
+                let http_for_task = Arc::clone(&ctx.http);
+
+                tokio::spawn(async move {
+                    let mut current_index = 0;
+                    loop {
+                        let config = config_for_task.read().await.clone();
+                        
+                        if !config.voice_status.enabled {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        let channel_id = serenity::all::ChannelId::new(config.voice_status.channel_id);
+                        let steps = &config.voice_status.steps;
+                        let interval = std::time::Duration::from_secs(config.voice_status.interval_secs.max(10));
+
+                        if channel_id.get() == 0 || steps.is_empty() {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        if current_index >= steps.len() {
+                            current_index = 0;
+                        }
+
+                        let status_text = &steps[current_index];
+                        tracing::debug!(
+                            channel_id = channel_id.get(),
+                            status = %status_text,
+                            "Updating voice channel status"
+                        );
+
+                        let map = serde_json::json!({
+                            "status": status_text
+                        });
+
+                        match http_for_task.edit_voice_status(channel_id, &map, None).await {
+                            Ok(_) => {
+                                tracing::info!(
+                                    channel_id = channel_id.get(),
+                                    status = %status_text,
+                                    "Successfully updated voice channel status"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    channel_id = channel_id.get(),
+                                    error = %e,
+                                    "Failed to update voice channel status"
+                                );
+                            }
+                        }
+
+                        current_index = (current_index + 1) % steps.len();
+                        tokio::time::sleep(interval).await;
+                    }
+                });
+
                 let data = Data {
-                    config: RwLock::new(config_clone.clone()),
+                    config: config_rwlock,
                     state,
                     normalizer: RwLock::new(normalizer),
                     tts_engine: RwLock::new(tts_engine),

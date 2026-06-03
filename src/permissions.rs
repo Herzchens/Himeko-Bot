@@ -67,6 +67,7 @@ mod tests {
             abbreviations: HashMap::new(),
             ai: crate::config::AiConfig::default(),
             rank: crate::config::RankConfig::default(),
+            voice_status: crate::config::VoiceStatusConfig::default(),
         }
     }
 

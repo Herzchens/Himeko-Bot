@@ -10,3 +10,4 @@ pub mod down;
 pub mod remove;
 pub mod leaderboard;
 pub mod autorename;
+pub mod rescan;
