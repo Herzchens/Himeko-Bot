@@ -141,3 +141,8 @@ voice_status:
     - "<a:loadingState:1164336902044930059> Creating new GitHub branch..."
     - "<a:loadingState:1164336902044930059> Commiting..."
     - "<a:loadingState:1164336902044930059> Creating a pull request..."
+
+# --- Console Chat Bridge config ---
+console_chat:
+  enabled: true
+  default_channel_id: 929418407814787113 # Kênh chat mặc định khi gõ từ console

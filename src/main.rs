@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
                 commands::rescan::rescan(),
+                commands::echo::echo(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
@@ -133,6 +134,50 @@ async fn main() -> anyhow::Result<()> {
                     "slash commands registered in guilds (instant update)"
                 );
                 let config_rwlock = Arc::new(RwLock::new(config_clone.clone()));
+
+                if config_clone.console_chat.enabled {
+                    let http_console = Arc::clone(&ctx.http);
+                    let initial_channel_id = config_clone.console_chat.default_channel_id;
+
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let mut reader = BufReader::new(tokio::io::stdin()).lines();
+                        let mut active_channel_id = initial_channel_id;
+
+                        tracing::info!(
+                            default_channel = active_channel_id,
+                            "Console chat listener task started. Type messages to send to Discord. Type /channel <ID> to swap."
+                        );
+
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+
+                            if line.starts_with("/channel ") || line.starts_with(":channel ") {
+                                let id_str = line.split_whitespace().nth(1).unwrap_or("");
+                                if let Ok(new_id) = id_str.parse::<u64>() {
+                                    active_channel_id = new_id;
+                                    tracing::info!(new_channel_id = active_channel_id, "Active console chat channel set");
+                                } else {
+                                    tracing::warn!("Invalid channel ID format. Usage: /channel <ID>");
+                                }
+                                continue;
+                            }
+
+                            let chan = serenity::all::ChannelId::new(active_channel_id);
+                            match chan.say(&http_console, line).await {
+                                Ok(_) => {
+                                    tracing::info!(channel = active_channel_id, message = %line, "Sent message from console");
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = %e, channel = active_channel_id, "Failed to send message from console");
+                                }
+                            }
+                        }
+                    });
+                }
 
                 let config_for_task = config_rwlock.clone();
                 let http_for_task = Arc::clone(&ctx.http);
