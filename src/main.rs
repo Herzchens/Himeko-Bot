@@ -156,11 +156,19 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
 
-                        if current_index >= steps.len() {
-                            current_index = 0;
-                        }
+                        let status_text = if config.voice_status.random {
+                            use rand::seq::IndexedRandom;
+                            use rand::rng;
+                            steps.choose(&mut rng()).unwrap_or(&steps[0])
+                        } else {
+                            if current_index >= steps.len() {
+                                current_index = 0;
+                            }
+                            let text = &steps[current_index];
+                            current_index = (current_index + 1) % steps.len();
+                            text
+                        };
 
-                        let status_text = &steps[current_index];
                         tracing::debug!(
                             channel_id = channel_id.get(),
                             status = %status_text,
@@ -188,7 +196,6 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
 
-                        current_index = (current_index + 1) % steps.len();
                         tokio::time::sleep(interval).await;
                     }
                 });

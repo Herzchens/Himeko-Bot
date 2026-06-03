@@ -427,6 +427,8 @@ pub struct VoiceStatusConfig {
     pub interval_secs: u64,
     #[serde(default)]
     pub steps: Vec<String>,
+    #[serde(default)]
+    pub random: bool,
 }
 
 fn default_voice_status_interval() -> u64 {
