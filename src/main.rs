@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let state = BotState::default();
+    state.active_console_channel.store(config.console_chat.default_channel_id, std::sync::atomic::Ordering::SeqCst);
 
     let default_female = config.tts.default_gender == "female";
     tracing::info!(
@@ -138,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
                 if config_clone.console_chat.enabled {
                     let http_console = Arc::clone(&ctx.http);
                     let initial_channel_id = config_clone.console_chat.default_channel_id;
+                    let state_clone = state.clone();
 
                     tokio::spawn(async move {
                         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -159,10 +161,46 @@ async fn main() -> anyhow::Result<()> {
                                 let id_str = line.split_whitespace().nth(1).unwrap_or("");
                                 if let Ok(new_id) = id_str.parse::<u64>() {
                                     active_channel_id = new_id;
+                                    state_clone.active_console_channel.store(new_id, std::sync::atomic::Ordering::SeqCst);
                                     tracing::info!(new_channel_id = active_channel_id, "Active console chat channel set");
                                 } else {
                                     tracing::warn!("Invalid channel ID format. Usage: /channel <ID>");
                                 }
+                                continue;
+                            }
+
+                            if line.starts_with("/reply ") || line.starts_with("/r ") || line.starts_with(":reply ") || line.starts_with(":r ") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                if parts.len() >= 3 {
+                                    if let Ok(idx) = parts[1].parse::<usize>() {
+                                        if idx >= 1 && idx <= 10 {
+                                            let msg_id_opt = {
+                                                if let Ok(guard) = state_clone.recent_messages.lock() {
+                                                    guard[idx - 1]
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some(msg_id) = msg_id_opt {
+                                                let reply_text = parts[2..].join(" ");
+                                                let chan = serenity::all::ChannelId::new(active_channel_id);
+                                                let msg_ref = serenity::all::CreateMessage::new()
+                                                    .content(&reply_text)
+                                                    .reference_message((chan, msg_id));
+                                                match chan.send_message(&http_console, msg_ref).await {
+                                                    Ok(_) => {
+                                                        tracing::info!(channel = active_channel_id, message = %reply_text, reply_to = %msg_id, "Sent reply from console");
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!(error = %e, "Failed to send reply from console");
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                                tracing::warn!("Invalid reply format. Usage: /r <1-10> <message>");
                                 continue;
                             }
 
