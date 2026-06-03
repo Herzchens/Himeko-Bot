@@ -181,9 +181,11 @@ async fn main() -> anyhow::Result<()> {
 
                 let config_for_task = config_rwlock.clone();
                 let http_for_task = Arc::clone(&ctx.http);
+                let cache_for_task = Arc::clone(&ctx.cache);
 
                 tokio::spawn(async move {
                     let mut current_index = 0;
+                    let mut was_empty = None;
                     loop {
                         let config = config_for_task.read().await.clone();
                         
@@ -200,6 +202,48 @@ async fn main() -> anyhow::Result<()> {
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             continue;
                         }
+
+                        // Check member count in target voice channel (excluding bots)
+                        let mut member_count = 0;
+                        let mut target_guild = None;
+                        for guild_id in cache_for_task.guilds() {
+                            if let Some(guild) = cache_for_task.guild(guild_id) {
+                                if guild.channels.contains_key(&channel_id) {
+                                    target_guild = Some(guild.clone());
+                                    break;
+                                }
+                            }
+                        }
+
+                        if let Some(guild) = target_guild {
+                            member_count = guild.voice_states.iter()
+                                .filter(|(user_id, vs)| {
+                                    if vs.channel_id != Some(channel_id) {
+                                        return false;
+                                    }
+                                    if let Some(user) = cache_for_task.user(*user_id) {
+                                        !user.bot
+                                    } else {
+                                        true
+                                    }
+                                })
+                                .count();
+                        }
+
+                        if member_count == 0 {
+                            if was_empty != Some(true) {
+                                tracing::info!(channel_id = channel_id.get(), "Voice channel is empty. Clearing status.");
+                                let map = serde_json::json!({
+                                    "status": ""
+                                });
+                                let _ = http_for_task.edit_voice_status(channel_id, &map, None).await;
+                                was_empty = Some(true);
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        was_empty = Some(false);
 
                         let status_text = if config.voice_status.random {
                             use rand::seq::IndexedRandom;
