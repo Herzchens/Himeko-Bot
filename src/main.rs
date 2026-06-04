@@ -24,7 +24,7 @@ use serenity::prelude::GatewayIntents;
 use songbird::SerenityInit;
 
 pub struct Data {
-    pub config: RwLock<Arc<Config>>,
+    pub config: Arc<RwLock<Arc<Config>>>,
     pub state: BotState,
     pub normalizer: RwLock<Arc<Normalizer>>,
     pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let state = BotState::default();
+    state.active_console_channel.store(config.console_chat.default_channel_id, std::sync::atomic::Ordering::SeqCst);
 
     let default_female = config.tts.default_gender == "female";
     tracing::info!(
@@ -114,6 +115,8 @@ async fn main() -> anyhow::Result<()> {
                 commands::remove::remove(),
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
+                commands::rescan::rescan(),
+                commands::echo::echo(),
             ],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(events::handler::event_handler(ctx, event, framework, data))
@@ -131,8 +134,201 @@ async fn main() -> anyhow::Result<()> {
                     commands = framework.options().commands.len(),
                     "slash commands registered in guilds (instant update)"
                 );
+                let config_rwlock = Arc::new(RwLock::new(config_clone.clone()));
+
+                if config_clone.console_chat.enabled {
+                    let http_console = Arc::clone(&ctx.http);
+                    let initial_channel_id = config_clone.console_chat.default_channel_id;
+                    let state_clone = state.clone();
+
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let mut reader = BufReader::new(tokio::io::stdin()).lines();
+                        let mut active_channel_id = initial_channel_id;
+
+                        tracing::info!(
+                            default_channel = active_channel_id,
+                            "Console chat listener task started. Type messages to send to Discord. Type /channel <ID> to swap."
+                        );
+
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+
+                            if line.starts_with("/channel ") || line.starts_with(":channel ") {
+                                let id_str = line.split_whitespace().nth(1).unwrap_or("");
+                                if let Ok(new_id) = id_str.parse::<u64>() {
+                                    active_channel_id = new_id;
+                                    state_clone.active_console_channel.store(new_id, std::sync::atomic::Ordering::SeqCst);
+                                    tracing::info!(new_channel_id = active_channel_id, "Active console chat channel set");
+                                } else {
+                                    tracing::warn!("Invalid channel ID format. Usage: /channel <ID>");
+                                }
+                                continue;
+                            }
+
+                            if line.starts_with("/reply ") || line.starts_with("/r ") || line.starts_with(":reply ") || line.starts_with(":r ") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                if parts.len() >= 3 {
+                                    if let Ok(idx) = parts[1].parse::<usize>() {
+                                        if idx >= 1 && idx <= 10 {
+                                            let msg_id_opt = {
+                                                if let Ok(guard) = state_clone.recent_messages.lock() {
+                                                    guard[idx - 1]
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some(msg_id) = msg_id_opt {
+                                                let reply_text = parts[2..].join(" ");
+                                                let chan = serenity::all::ChannelId::new(active_channel_id);
+                                                let msg_ref = serenity::all::CreateMessage::new()
+                                                    .content(&reply_text)
+                                                    .reference_message((chan, msg_id));
+                                                match chan.send_message(&http_console, msg_ref).await {
+                                                    Ok(_) => {
+                                                        tracing::info!(channel = active_channel_id, message = %reply_text, reply_to = %msg_id, "Sent reply from console");
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!(error = %e, "Failed to send reply from console");
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                                tracing::warn!("Invalid reply format. Usage: /r <1-10> <message>");
+                                continue;
+                            }
+
+                            let chan = serenity::all::ChannelId::new(active_channel_id);
+                            match chan.say(&http_console, line).await {
+                                Ok(_) => {
+                                    tracing::info!(channel = active_channel_id, message = %line, "Sent message from console");
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = %e, channel = active_channel_id, "Failed to send message from console");
+                                }
+                            }
+                        }
+                    });
+                }
+
+                let config_for_task = config_rwlock.clone();
+                let http_for_task = Arc::clone(&ctx.http);
+                let cache_for_task = Arc::clone(&ctx.cache);
+
+                tokio::spawn(async move {
+                    let mut current_index = 0;
+                    let mut was_empty = None;
+                    loop {
+                        let config = config_for_task.read().await.clone();
+                        
+                        if !config.voice_status.enabled {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        let channel_id = serenity::all::ChannelId::new(config.voice_status.channel_id);
+                        let steps = &config.voice_status.steps;
+                        let interval = std::time::Duration::from_secs(config.voice_status.interval_secs.max(10));
+
+                        if channel_id.get() == 0 || steps.is_empty() {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        // Check member count in target voice channel (excluding bots)
+                        let mut member_count = 0;
+                        let mut target_guild = None;
+                        for guild_id in cache_for_task.guilds() {
+                            if let Some(guild) = cache_for_task.guild(guild_id) {
+                                if guild.channels.contains_key(&channel_id) {
+                                    target_guild = Some(guild.clone());
+                                    break;
+                                }
+                            }
+                        }
+
+                        if let Some(guild) = target_guild {
+                            member_count = guild.voice_states.iter()
+                                .filter(|(user_id, vs)| {
+                                    if vs.channel_id != Some(channel_id) {
+                                        return false;
+                                    }
+                                    if let Some(user) = cache_for_task.user(*user_id) {
+                                        !user.bot
+                                    } else {
+                                        true
+                                    }
+                                })
+                                .count();
+                        }
+
+                        if member_count == 0 {
+                            if was_empty != Some(true) {
+                                tracing::info!(channel_id = channel_id.get(), "Voice channel is empty. Clearing status.");
+                                let map = serde_json::json!({
+                                    "status": ""
+                                });
+                                let _ = http_for_task.edit_voice_status(channel_id, &map, None).await;
+                                was_empty = Some(true);
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            continue;
+                        }
+
+                        was_empty = Some(false);
+
+                        let status_text = if config.voice_status.random {
+                            use rand::seq::IndexedRandom;
+                            use rand::rng;
+                            steps.choose(&mut rng()).unwrap_or(&steps[0])
+                        } else {
+                            if current_index >= steps.len() {
+                                current_index = 0;
+                            }
+                            let text = &steps[current_index];
+                            current_index = (current_index + 1) % steps.len();
+                            text
+                        };
+
+                        tracing::debug!(
+                            channel_id = channel_id.get(),
+                            status = %status_text,
+                            "Updating voice channel status"
+                        );
+
+                        let map = serde_json::json!({
+                            "status": status_text
+                        });
+
+                        match http_for_task.edit_voice_status(channel_id, &map, None).await {
+                            Ok(_) => {
+                                tracing::info!(
+                                    channel_id = channel_id.get(),
+                                    status = %status_text,
+                                    "Successfully updated voice channel status"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    channel_id = channel_id.get(),
+                                    error = %e,
+                                    "Failed to update voice channel status"
+                                );
+                            }
+                        }
+
+                        tokio::time::sleep(interval).await;
+                    }
+                });
+
                 let data = Data {
-                    config: RwLock::new(config_clone.clone()),
+                    config: config_rwlock,
                     state,
                     normalizer: RwLock::new(normalizer),
                     tts_engine: RwLock::new(tts_engine),

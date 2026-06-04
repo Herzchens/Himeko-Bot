@@ -193,6 +193,19 @@ pub async fn handle_message(
         return;
     }
 
+    let active_chan = data.state.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+    if active_chan != 0 && msg.channel_id.get() == active_chan {
+        let idx = {
+            let counter = data.state.message_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let idx = counter % 10;
+            if let Ok(mut guard) = data.state.recent_messages.lock() {
+                guard[idx] = Some(msg.id);
+            }
+            idx
+        };
+        println!("[{}] {}: {}", idx + 1, msg.author.name, msg.content);
+    }
+
     if handle_ai_mention(ctx, msg, data).await {
         return;
     }

@@ -10,11 +10,27 @@ pub struct VoiceSession {
     pub channel_id: serenity::model::id::ChannelId,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct BotState {
     sessions: Arc<DashMap<GuildId, VoiceSession>>,
     gender: Arc<DashMap<UserId, bool>>,
     queue_locks: Arc<DashMap<GuildId, Arc<tokio::sync::Mutex<()>>>>,
+    pub active_console_channel: Arc<std::sync::atomic::AtomicU64>,
+    pub recent_messages: Arc<std::sync::Mutex<[Option<serenity::all::MessageId>; 10]>>,
+    pub message_counter: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Default for BotState {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(DashMap::new()),
+            gender: Arc::new(DashMap::new()),
+            queue_locks: Arc::new(DashMap::new()),
+            active_console_channel: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            recent_messages: Arc::new(std::sync::Mutex::new([None; 10])),
+            message_counter: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
 }
 
 impl BotState {

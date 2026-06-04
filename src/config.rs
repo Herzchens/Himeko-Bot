@@ -12,6 +12,10 @@ pub struct Config {
     pub ai: AiConfig,
     #[serde(default)]
     pub rank: RankConfig,
+    #[serde(default)]
+    pub voice_status: VoiceStatusConfig,
+    #[serde(default)]
+    pub console_chat: ConsoleChatConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -413,4 +417,30 @@ impl RankConfig {
         let stars = (level - 1) % self.stars_per_rank + 1;
         Ok((&self.ranks[rank_idx as usize], stars))
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct VoiceStatusConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub channel_id: u64,
+    #[serde(default = "default_voice_status_interval")]
+    pub interval_secs: u64,
+    #[serde(default)]
+    pub steps: Vec<String>,
+    #[serde(default)]
+    pub random: bool,
+}
+
+fn default_voice_status_interval() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ConsoleChatConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub default_channel_id: u64,
 }

@@ -128,3 +128,21 @@ rank:
     - "CHÓ RÁCH"
     - "CHÓ ĐIÊN"
     - "CHÓ TRÙM"
+
+# --- Voice Status rotation config ---
+voice_status:
+  enabled: false # Kích hoạt tự động xoay tua trạng thái phòng voice (true = bật | false = tắt)
+  channel_id: 123456789012345678 # Điền ID phòng voice muốn đổi status
+  interval_secs: 300 # Thời gian chuyển bước (Ví dụ: 300 giây = 5 phút)
+  random: false # Chế độ lấy ngẫu nhiên status (true = ngẫu nhiên | false = tuần tự từ trên xuống)
+  steps:
+    - "<a:loadingState:1164336902044930059> Connecting..."
+    - "<a:loadingState:1164336902044930059> Reasoning and Developing..."
+    - "<a:loadingState:1164336902044930059> Creating new GitHub branch..."
+    - "<a:loadingState:1164336902044930059> Commiting..."
+    - "<a:loadingState:1164336902044930059> Creating a pull request..."
+
+# --- Console Chat Bridge config ---
+console_chat:
+  enabled: true # Kích hoạt gửi tin nhắn chat từ console bot lên Discord (true = bật | false = tắt)
+  default_channel_id: 929418407814787113 # Kênh chat mặc định khi gõ từ console
