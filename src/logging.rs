@@ -59,7 +59,7 @@ where
                     fields_str.push_str(&format!(" {}={}", name, clean_val));
                 }
                 
-                let formatted = format!("[{}] {}: {}{}", level, target, clean_msg, fields_str);
+                let formatted = format!("**[{}] {}:** {}{}", level, target, clean_msg, fields_str);
                 let _ = self.sender.send(formatted);
             }
         }
