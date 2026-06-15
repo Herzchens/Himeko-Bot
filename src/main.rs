@@ -7,6 +7,7 @@ mod text;
 mod tts;
 pub mod ai;
 pub mod rank;
+pub mod logging;
 
 use config::Config;
 use state::BotState;
@@ -38,15 +39,25 @@ pub struct Data {
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("himeko_bot=debug".parse()?),
-        )
-        .init();
-
     let config = Config::load("config.yml")?;
     let config = Arc::new(config);
+
+    // Setup tracing registry with fmt layer and optional Discord webhook layer
+    use tracing_subscriber::prelude::*;
+    let filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("himeko_bot=debug".parse()?);
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
+
+    let _log_task_handle = if !config.logging.webhook_url.is_empty() {
+        let (discord_layer, log_task) = logging::start_discord_logging(config.logging.webhook_url.clone());
+        let registry = registry.with(discord_layer);
+        registry.init();
+        Some(log_task)
+    } else {
+        registry.init();
+        None
+    };
 
     tracing::info!("config loaded — owner_id={}", config.permissions.owner_id);
 
@@ -125,10 +136,14 @@ async fn main() -> anyhow::Result<()> {
         })
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                // Register commands globally. 
-                // Global commands can take up to an hour to propagate, but this prevents duplicates 
-                // and is the standard for production bots.
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                let guild_id = serenity::all::GuildId::new(config_clone.rank.guild_id);
+                if guild_id.get() != 0 {
+                    poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id).await?;
+                    tracing::info!(guild_id = guild_id.get(), "Slash commands registered locally in guild (instant update)");
+                } else {
+                    poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                    tracing::info!("Slash commands registered globally");
+                }
 
                 tracing::info!(
                     commands = framework.options().commands.len(),
@@ -388,7 +403,8 @@ async fn main() -> anyhow::Result<()> {
         | GatewayIntents::GUILD_VOICE_STATES
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::GUILD_MEMBERS
-        | GatewayIntents::MESSAGE_CONTENT;
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::DIRECT_MESSAGES;
 
     let mut client = serenity::Client::builder(&config.bot.token, intents)
         .framework(framework)

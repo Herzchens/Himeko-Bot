@@ -146,3 +146,7 @@ voice_status:
 console_chat:
   enabled: true # Kích hoạt gửi tin nhắn chat từ console bot lên Discord (true = bật | false = tắt)
   default_channel_id: 929418407814787113 # Kênh chat mặc định khi gõ từ console
+
+# --- Discord Logging Webhook ---
+logging:
+  webhook_url: "" # Discord Webhook URL to stream bot console logs to a private server channel
