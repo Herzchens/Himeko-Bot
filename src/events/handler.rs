@@ -194,6 +194,8 @@ async fn handle_owner_dm(
         return;
     }
 
+    let via = if msg.guild_id.is_none() { "DM" } else { "control channel" };
+
     let active_chan_id = data.state.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
 
     if content.starts_with("/channel ") || content.starts_with(":channel ") {
@@ -233,7 +235,7 @@ async fn handle_owner_dm(
                         match chan.send_message(&ctx.http, msg_ref).await {
                             Ok(_) => {
                                 let _ = msg.react(ctx, '✅').await;
-                                tracing::info!(channel = active_chan_id, message = %reply_text, reply_to = %msg_id, "Sent reply via DM");
+                                tracing::info!(channel = active_chan_id, message = %reply_text, reply_to = %msg_id, "Sent reply via {}", via);
                             }
                             Err(e) => {
                                 let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {}", e)).await;
@@ -257,7 +259,7 @@ async fn handle_owner_dm(
     match chan.say(&ctx.http, content).await {
         Ok(_) => {
             let _ = msg.react(ctx, '✅').await;
-            tracing::info!(channel = active_chan_id, message = %content, "Sent message via DM");
+            tracing::info!(channel = active_chan_id, message = %content, "Sent message via {}", via);
         }
         Err(e) => {
             let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn thất bại: {}", e)).await;
@@ -276,8 +278,11 @@ pub async fn handle_message(
 
     let config = data.config.read().await.clone();
 
-    // Intercept DMs from the owner
-    if msg.guild_id.is_none() && msg.author.id.get() == config.permissions.owner_id {
+    // Intercept DMs or control channel messages from the owner
+    let is_control_channel = config.logging.control_channel_id != 0 
+        && msg.channel_id.get() == config.logging.control_channel_id;
+
+    if (msg.guild_id.is_none() || is_control_channel) && msg.author.id.get() == config.permissions.owner_id {
         handle_owner_dm(ctx, msg, data).await;
         return;
     }

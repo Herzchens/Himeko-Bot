@@ -15,12 +15,17 @@ impl DiscordLogLayer {
 
 struct MessageVisitor {
     message: String,
+    fields: Vec<(String, String)>,
 }
 
 impl tracing::field::Visit for MessageVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.message = format!("{:?}", value);
+        let name = field.name();
+        let val_str = format!("{:?}", value);
+        if name == "message" {
+            self.message = val_str;
+        } else {
+            self.fields.push((name.to_string(), val_str));
         }
     }
 }
@@ -32,7 +37,7 @@ where
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let metadata = event.metadata();
         if metadata.target().starts_with("himeko_bot") {
-            let mut visitor = MessageVisitor { message: String::new() };
+            let mut visitor = MessageVisitor { message: String::new(), fields: Vec::new() };
             event.record(&mut visitor);
             
             if !visitor.message.is_empty() {
@@ -45,7 +50,16 @@ where
                     clean_msg = clean_msg[1..clean_msg.len()-1].to_string();
                 }
                 
-                let formatted = format!("[{}] {}: {}", level, target, clean_msg);
+                let mut fields_str = String::new();
+                for (name, val) in visitor.fields {
+                    let mut clean_val = val;
+                    if clean_val.starts_with('"') && clean_val.ends_with('"') && clean_val.len() >= 2 {
+                        clean_val = clean_val[1..clean_val.len()-1].to_string();
+                    }
+                    fields_str.push_str(&format!(" {}={}", name, clean_val));
+                }
+                
+                let formatted = format!("[{}] {}: {}{}", level, target, clean_msg, fields_str);
                 let _ = self.sender.send(formatted);
             }
         }
@@ -97,7 +111,7 @@ pub fn start_discord_logging(webhook_url: String) -> (DiscordLogLayer, tokio::ta
 
 async fn send_to_webhook(client: &reqwest::Client, url: &str, content: &str) {
     let payload = serde_json::json!({
-        "content": format!("```ini\n{}\n```", content)
+        "content": content
     });
     
     match client.post(url).json(&payload).send().await {

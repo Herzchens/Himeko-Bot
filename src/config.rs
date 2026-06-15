@@ -451,4 +451,6 @@ pub struct ConsoleChatConfig {
 pub struct LoggingConfig {
     #[serde(default)]
     pub webhook_url: String,
+    #[serde(default)]
+    pub control_channel_id: u64,
 }

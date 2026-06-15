@@ -149,4 +149,5 @@ console_chat:
 
 # --- Discord Logging Webhook ---
 logging:
-  webhook_url: "" # Discord Webhook URL to stream bot console logs to a private server channel
+  webhook_url: "" # Discord Webhook URL to stream bot console logs to a private server channel
+  control_channel_id: 0 # (Optional) ID of a dedicated Discord channel to act as the remote console chat bridge

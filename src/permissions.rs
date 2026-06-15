@@ -69,6 +69,10 @@ mod tests {
             rank: crate::config::RankConfig::default(),
             voice_status: crate::config::VoiceStatusConfig::default(),
             console_chat: crate::config::ConsoleChatConfig::default(),
+            logging: crate::config::LoggingConfig {
+                webhook_url: "".to_string(),
+                control_channel_id: 0,
+            },
         }
     }
 
