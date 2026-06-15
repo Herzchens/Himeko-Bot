@@ -47,6 +47,22 @@ impl MessageFilter {
     pub async fn clean(_cache_http: impl serenity::all::CacheHttp, msg: &serenity::model::channel::Message) -> String {
         let mut t = msg.content.clone();
 
+        if !msg.attachments.is_empty() {
+            if t.trim().is_empty() {
+                t = "gửi một ảnh".to_string();
+            } else {
+                t.push_str(" gửi kèm một ảnh");
+            }
+        }
+
+        if !msg.sticker_items.is_empty() {
+            if t.trim().is_empty() {
+                t = "gửi một nhãn dán".to_string();
+            } else {
+                t.push_str(" gửi kèm một nhãn dán");
+            }
+        }
+
 
         for user in &msg.mentions {
             let mention_tag_1 = format!("<@{}>", user.id);

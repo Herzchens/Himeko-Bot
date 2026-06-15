@@ -184,12 +184,105 @@ fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &
     }
 }
 
+async fn handle_owner_dm(
+    ctx: &serenity::client::Context,
+    msg: &serenity::model::channel::Message,
+    data: &Data,
+) {
+    let content = msg.content.trim();
+    if content.is_empty() {
+        return;
+    }
+
+    let active_chan_id = data.state.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+
+    if content.starts_with("/channel ") || content.starts_with(":channel ") {
+        let id_str = content.split_whitespace().nth(1).unwrap_or("");
+        if let Ok(new_id) = id_str.parse::<u64>() {
+            data.state.active_console_channel.store(new_id, std::sync::atomic::Ordering::SeqCst);
+            let _ = msg.reply(ctx, format!("✅ Đã chuyển kênh console chat sang: <#{}>", new_id)).await;
+            tracing::info!(new_channel_id = new_id, "Active console chat channel set via DM");
+        } else {
+            let _ = msg.reply(ctx, "❌ ID kênh không hợp lệ. Cú pháp: `/channel <ID>`").await;
+        }
+        return;
+    }
+
+    if content.starts_with("/reply ") || content.starts_with("/r ") || content.starts_with(":reply ") || content.starts_with(":r ") {
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if parts.len() >= 3 {
+            if let Ok(idx) = parts[1].parse::<usize>() {
+                if idx >= 1 && idx <= 10 {
+                    let msg_id_opt = {
+                        if let Ok(guard) = data.state.recent_messages.lock() {
+                            guard[idx - 1]
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(msg_id) = msg_id_opt {
+                        let reply_text = parts[2..].join(" ");
+                        if active_chan_id == 0 {
+                            let _ = msg.reply(ctx, "❌ Chưa chọn kênh chat. Vui lòng dùng lệnh `/channel <ID>` trước.").await;
+                            return;
+                        }
+                        let chan = serenity::all::ChannelId::new(active_chan_id);
+                        let msg_ref = serenity::all::CreateMessage::new()
+                            .content(&reply_text)
+                            .reference_message((chan, msg_id));
+                        match chan.send_message(&ctx.http, msg_ref).await {
+                            Ok(_) => {
+                                let _ = msg.react(ctx, '✅').await;
+                                tracing::info!(channel = active_chan_id, message = %reply_text, reply_to = %msg_id, "Sent reply via DM");
+                            }
+                            Err(e) => {
+                                let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {}", e)).await;
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        let _ = msg.reply(ctx, "❌ Cú pháp không hợp lệ. Cú pháp: `/r <1-10> <nội dung>`").await;
+        return;
+    }
+
+    if active_chan_id == 0 {
+        let _ = msg.reply(ctx, "❌ Chưa chọn kênh chat. Vui lòng dùng lệnh `/channel <ID>` trước.").await;
+        return;
+    }
+
+    let chan = serenity::all::ChannelId::new(active_chan_id);
+    match chan.say(&ctx.http, content).await {
+        Ok(_) => {
+            let _ = msg.react(ctx, '✅').await;
+            tracing::info!(channel = active_chan_id, message = %content, "Sent message via DM");
+        }
+        Err(e) => {
+            let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn thất bại: {}", e)).await;
+        }
+    }
+}
+
 pub async fn handle_message(
     ctx: &serenity::client::Context,
     msg: &serenity::model::channel::Message,
     data: &Data,
 ) {
-    if msg.author.bot || msg.content.starts_with('/') {
+    if msg.author.bot {
+        return;
+    }
+
+    let config = data.config.read().await.clone();
+
+    // Intercept DMs from the owner
+    if msg.guild_id.is_none() && msg.author.id.get() == config.permissions.owner_id {
+        handle_owner_dm(ctx, msg, data).await;
+        return;
+    }
+
+    if msg.content.starts_with('/') {
         return;
     }
 
@@ -204,6 +297,7 @@ pub async fn handle_message(
             idx
         };
         println!("[{}] {}: {}", idx + 1, msg.author.name, msg.content);
+        tracing::info!(target: "himeko_bot::console", "[{}] {}: {}", idx + 1, msg.author.name, msg.content);
     }
 
     if handle_ai_mention(ctx, msg, data).await {

@@ -16,6 +16,8 @@ pub struct Config {
     pub voice_status: VoiceStatusConfig,
     #[serde(default)]
     pub console_chat: ConsoleChatConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -443,4 +445,10 @@ pub struct ConsoleChatConfig {
     pub enabled: bool,
     #[serde(default)]
     pub default_channel_id: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LoggingConfig {
+    #[serde(default)]
+    pub webhook_url: String,
 }
