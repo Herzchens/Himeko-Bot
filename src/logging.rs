@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
