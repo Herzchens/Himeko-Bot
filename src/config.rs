@@ -86,6 +86,7 @@ pub struct PermissionsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
@@ -861,6 +862,36 @@ tts:
 "#,
         )
         .expect("test config must parse")
+    }
+
+    #[test]
+    fn top_level_tts_typos_are_parse_errors_instead_of_silent_fallbacks() {
+        for (field, value) in [
+            ("provder", "vieneu"),
+            ("max_char", "80"),
+            ("defualt_gender", "male"),
+        ] {
+            let yaml = format!(
+                r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: msedge
+  msedge: []
+  {field}: {value}
+"#
+            );
+            let error = serde_yaml::from_str::<Config>(&yaml)
+                .expect_err("unknown top-level TTS field must be rejected");
+            let message = error.to_string();
+            assert!(
+                message.contains("unknown field") && message.contains(field),
+                "unexpected parse error for {field}: {message}"
+            );
+        }
     }
 
     #[test]

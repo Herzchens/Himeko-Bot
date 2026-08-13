@@ -14,7 +14,7 @@ use config::Config;
 use state::BotState;
 use std::sync::Arc;
 use text::normalizer::Normalizer;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tts::engine::MsEdgeEngine;
 use tts::gtts::GttsEngine;
 use tts::openai::OpenAiEngine;
@@ -35,6 +35,7 @@ pub struct RuntimeSnapshot {
 pub struct RuntimeState {
     current: RwLock<Arc<RuntimeSnapshot>>,
     updates: tokio::sync::watch::Sender<u64>,
+    reload_gate: Mutex<()>,
 }
 
 impl RuntimeState {
@@ -43,7 +44,12 @@ impl RuntimeState {
         Self {
             current: RwLock::new(initial),
             updates,
+            reload_gate: Mutex::new(()),
         }
+    }
+
+    pub async fn begin_reload(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.reload_gate.lock().await
     }
 
     pub async fn snapshot(&self) -> Arc<RuntimeSnapshot> {
@@ -792,6 +798,35 @@ tts:
                 || observed == (22, "new".to_string(), vec![2], false),
             "runtime reader observed a mixed generation: {observed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn reload_transactions_are_serialized() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let state = Arc::new(RuntimeState::new(snapshot(11, "initial", 1, true)));
+        let first = state.begin_reload().await;
+        let second_state = Arc::clone(&state);
+        let second_entered = Arc::new(AtomicBool::new(false));
+        let second_entered_task = Arc::clone(&second_entered);
+
+        let second = tokio::spawn(async move {
+            let _guard = second_state.begin_reload().await;
+            second_entered_task.store(true, Ordering::SeqCst);
+        });
+
+        tokio::task::yield_now().await;
+        assert!(
+            !second_entered.load(Ordering::SeqCst),
+            "a second reload must wait while the first transaction is still active"
+        );
+
+        drop(first);
+        tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .expect("second reload must proceed after the first transaction releases")
+            .expect("second reload task must complete");
+        assert!(second_entered.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

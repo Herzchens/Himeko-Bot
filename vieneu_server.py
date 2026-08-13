@@ -3,9 +3,11 @@ import io
 import sys
 import argparse
 import threading
+from importlib.metadata import PackageNotFoundError, version as package_version
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="turbo", help="VieNeu-TTS mode: standard | turbo | fast | remote | xpu")
+parser.add_argument("--host", default="127.0.0.1", help="Loopback host/interface to bind")
 parser.add_argument("--port", type=int, default=7799, help="Port to listen on")
 parser.add_argument("--device", default="cpu", help="Device to run on: cpu | cuda")
 args, _ = parser.parse_known_args()
@@ -13,8 +15,22 @@ args, _ = parser.parse_known_args()
 sys.argv = [sys.argv[0]]
 
 # CRITICAL: Import and initialize VieNeu-TTS (CUDA context) FIRST to avoid DLL conflicts with subsequent C++ imports
+SUPPORTED_VIENEU_VERSION = "2.7.0"
 tts = None
 try:
+    try:
+        installed_vieneu = package_version("vieneu")
+    except PackageNotFoundError as exc:
+        raise RuntimeError(
+            "VieNeu-TTS is not installed; run: pip install -r requirements-vieneu.txt"
+        ) from exc
+    if installed_vieneu != SUPPORTED_VIENEU_VERSION:
+        raise RuntimeError(
+            f"Unsupported VieNeu-TTS version {installed_vieneu}; Himeko requires "
+            f"{SUPPORTED_VIENEU_VERSION}. Recreate/update the environment with "
+            "pip install -r requirements-vieneu.txt"
+        )
+
     from vieneu import Vieneu
     kwargs = {}
     if args.mode == "standard":
@@ -198,4 +214,4 @@ def tts_endpoint(req: TtsRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port)

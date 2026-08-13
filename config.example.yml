@@ -60,7 +60,7 @@ tts:
     - model: "tts-1"
 
   # --- VieNeu-TTS config (TTS local CPU-optimized server) ---
-  # Cần chạy: pip install vieneu && python vieneu_server.py
+  # Cài dependency được Himeko hỗ trợ: pip install -r requirements-vieneu.txt
   vieneu:
     - server_url: "http://127.0.0.1:7799"
     - female: "Ly" # Giọng nữ. Cho standard/gpu mặc định dùng "Ly" (Trúc Ly). Cho turbo/turbo_gpu hãy dùng "Bích Ngọc" hoặc "Thục Đoan". (Hoặc path âm thanh wav/mp3 để clone)

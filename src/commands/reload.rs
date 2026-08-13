@@ -71,6 +71,9 @@ fn legacy_rank_enable_requires_restart(
 #[poise::command(slash_command, guild_only)]
 pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
+    // Serialize the full reload transaction, not just pointer publication. Otherwise an
+    // older slow engine build can complete after a newer reload and restore stale state.
+    let _reload_transaction = ctx.data().runtime.begin_reload().await;
     let current_runtime = ctx.data().runtime_snapshot().await;
     let current_config = Arc::clone(&current_runtime.config);
     let level = UserLevel::of(ctx.author().id.get(), &current_config);

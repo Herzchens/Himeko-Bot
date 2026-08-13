@@ -94,18 +94,21 @@ See `config.example.yml` for the full configuration helper.
 VieNeu-TTS is a state-of-the-art Vietnamese TTS engine integrated into Himeko Bot. It supports high-quality offline voices (`Ly`, `Binh`) and can be run with GPU (CUDA) acceleration on Windows:
 
 ### 1. Python 3.12 Virtual Environment Setup
-Create the local environment directly with Python 3.12 and install the required packages:
+Himeko's bundled `vieneu_server.py` is validated against **VieNeu 2.7.0**. Do not install an unpinned/latest VieNeu release into this environment; newer major releases have a different dependency/runtime contract.
+
+Create the local environment with Python 3.12 and install the tested CPU dependency set:
 ```powershell
 py -3.12 -m venv venv
 .\venv\Scripts\python.exe -m pip install --upgrade pip
-.\venv\Scripts\python.exe -m pip install vieneu fastapi uvicorn numpy
+.\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt
 ```
 
-### 2. Enabling GPU (CUDA) Acceleration (Optional but Recommended)
-For ultra-fast, high-quality synthesis, install the PyTorch + CUDA package inside the virtual environment:
+### 2. Enabling GPU (CUDA) Acceleration (Optional)
+For the `fast`/LMDeploy mode, add the GPU extra from the **same supported VieNeu 2.7.0 release**:
 ```powershell
-.\venv\Scripts\python.exe -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+.\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt "vieneu[gpu]==2.7.0"
 ```
+The dependency/import path is validated on Windows/Python 3.12. Actual CUDA inference still depends on a compatible NVIDIA driver/GPU and the upstream VieNeu/LMDeploy runtime; CPU `turbo` remains the portable default.
 
 ### 3. Running & Configuration
 Set the TTS provider to `"vieneu"` in your `config.yml`:

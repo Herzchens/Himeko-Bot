@@ -46,7 +46,7 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-fn loopback_port(server_url: &str) -> anyhow::Result<Option<u16>> {
+fn loopback_endpoint(server_url: &str) -> anyhow::Result<Option<(String, u16)>> {
     let url = parse_server_url(server_url)?;
     let host = url
         .host_str()
@@ -54,9 +54,14 @@ fn loopback_port(server_url: &str) -> anyhow::Result<Option<u16>> {
     if !is_loopback_host(host) {
         return Ok(None);
     }
-    url.port_or_known_default()
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("VieNeu loopback server_url must include a usable port"))
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow::anyhow!("VieNeu loopback server_url must include a usable port"))?;
+    let bind_host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    Ok(Some((bind_host, port)))
 }
 
 fn health_url(server_url: &str) -> String {
@@ -120,7 +125,34 @@ fn python_command() -> String {
     }
 }
 
-fn spawn_vieneu(port: u16, mode: &str, device: &str) -> anyhow::Result<std::process::Child> {
+fn build_vieneu_command(
+    python: impl AsRef<std::ffi::OsStr>,
+    host: &str,
+    port: u16,
+    mode: &str,
+    device: &str,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(python);
+    command.args([
+        "vieneu_server.py",
+        "--host",
+        host,
+        "--port",
+        &port.to_string(),
+        "--mode",
+        mode,
+        "--device",
+        device,
+    ]);
+    command
+}
+
+fn spawn_vieneu(
+    host: &str,
+    port: u16,
+    mode: &str,
+    device: &str,
+) -> anyhow::Result<std::process::Child> {
     let python = python_command();
     let stdout = std::fs::File::create("vieneu_server.log")
         .map(std::process::Stdio::from)
@@ -129,17 +161,8 @@ fn spawn_vieneu(port: u16, mode: &str, device: &str) -> anyhow::Result<std::proc
         .map(std::process::Stdio::from)
         .unwrap_or_else(|_| std::process::Stdio::null());
 
-    tracing::info!(port, mode, device, %python, "starting managed VieNeu-TTS server");
-    std::process::Command::new(python)
-        .args([
-            "vieneu_server.py",
-            "--port",
-            &port.to_string(),
-            "--mode",
-            mode,
-            "--device",
-            device,
-        ])
+    tracing::info!(host, port, mode, device, %python, "starting managed VieNeu-TTS server");
+    build_vieneu_command(python, host, port, mode, device)
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
@@ -168,15 +191,16 @@ impl VieneuEngine {
         let mut readiness_proven = false;
 
         if config.autostart {
-            match loopback_port(&config.server_url)? {
-                Some(port) => {
+            match loopback_endpoint(&config.server_url)? {
+                Some((host, port)) => {
                     let mode = config.mode.as_deref().unwrap_or("turbo");
                     let device = config.device.as_deref().unwrap_or("cpu");
-                    let key = format!("vieneu:{port}");
-                    let signature = format!("mode={mode};device={device}");
+                    let key = format!("vieneu:{host}:{port}");
+                    let signature = format!("host={host};port={port};mode={mode};device={device}");
 
                     if let Some(existing) = local_process::existing(&key, &signature)? {
                         tracing::info!(
+                            host,
                             port,
                             pid = ?existing.pid(),
                             "reusing managed VieNeu-TTS process across engine reload"
@@ -184,14 +208,20 @@ impl VieneuEngine {
                         process = Some(existing);
                     } else if health_ready(&client, &config.server_url).await {
                         readiness_proven = true;
-                        tracing::info!(port, "using already-ready external VieNeu-TTS server");
+                        tracing::info!(
+                            host,
+                            port,
+                            "using already-ready external VieNeu-TTS server"
+                        );
                     } else {
+                        let host_owned = host.clone();
                         let mode_owned = mode.to_string();
                         let device_owned = device.to_string();
                         let managed = local_process::spawn_managed(key, signature, move || {
-                            spawn_vieneu(port, &mode_owned, &device_owned)
+                            spawn_vieneu(&host_owned, port, &mode_owned, &device_owned)
                         })?;
                         tracing::info!(
+                            host,
                             port,
                             pid = ?managed.pid(),
                             "managed VieNeu-TTS server started; waiting for readiness"
@@ -338,13 +368,48 @@ mod tests {
     }
 
     #[test]
-    fn autostart_only_targets_loopback_url() {
-        assert_eq!(loopback_port("http://127.0.0.1:7799").unwrap(), Some(7799));
-        assert_eq!(loopback_port("http://127.42.0.9:7799").unwrap(), Some(7799));
-        assert!(loopback_port("http://localhost:7799/v1").is_err());
-        assert_eq!(loopback_port("http://[::1]:7799").unwrap(), Some(7799));
-        assert_eq!(loopback_port("https://tts.example.com:7799").unwrap(), None);
-        assert_eq!(loopback_port("http://192.168.1.5:7799").unwrap(), None);
+    fn autostart_only_targets_loopback_and_preserves_bind_host() {
+        assert_eq!(
+            loopback_endpoint("http://127.0.0.1:7799").unwrap(),
+            Some(("127.0.0.1".to_string(), 7799))
+        );
+        assert_eq!(
+            loopback_endpoint("http://127.42.0.9:7799").unwrap(),
+            Some(("127.42.0.9".to_string(), 7799))
+        );
+        assert!(loopback_endpoint("http://localhost:7799/v1").is_err());
+        assert_eq!(
+            loopback_endpoint("http://[::1]:7799").unwrap(),
+            Some(("::1".to_string(), 7799))
+        );
+        assert_eq!(
+            loopback_endpoint("https://tts.example.com:7799").unwrap(),
+            None
+        );
+        assert_eq!(loopback_endpoint("http://192.168.1.5:7799").unwrap(), None);
+    }
+
+    #[test]
+    fn autostart_command_forwards_the_configured_loopback_host() {
+        let command = build_vieneu_command("python", "::1", 7799, "turbo", "cpu");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            [
+                "vieneu_server.py",
+                "--host",
+                "::1",
+                "--port",
+                "7799",
+                "--mode",
+                "turbo",
+                "--device",
+                "cpu",
+            ]
+        );
     }
 
     fn test_config(server_url: String, autostart: bool) -> VieneuConfig {
