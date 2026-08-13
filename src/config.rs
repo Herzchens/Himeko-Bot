@@ -86,6 +86,7 @@ pub struct PermissionsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
     pub provider: String,
@@ -137,7 +138,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "F2".to_string() } else { "M1".to_string() }
+                if is_female {
+                    "F2".to_string()
+                } else {
+                    "M1".to_string()
+                }
             }
             "openai" => {
                 if let Some(ref list) = self.openai {
@@ -150,7 +155,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "nova".to_string() } else { "onyx".to_string() }
+                if is_female {
+                    "nova".to_string()
+                } else {
+                    "onyx".to_string()
+                }
             }
             "vieneu" => {
                 if let Some(ref list) = self.vieneu {
@@ -163,7 +172,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "truc_ly".to_string() } else { "nam_phuong".to_string() }
+                if is_female {
+                    "truc_ly".to_string()
+                } else {
+                    "nam_phuong".to_string()
+                }
             }
             _ => {
                 let key = if is_female { "female" } else { "male" };
@@ -196,10 +209,13 @@ impl TtsConfig {
                 lang = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("steps") {
-                steps = val.as_u64().map(|v| v as u8);
+                steps = val.as_u64().and_then(|v| u8::try_from(v).ok());
             }
             if let Some(val) = map.get("speed") {
-                speed = val.as_f64().map(|v| v as f32);
+                speed = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("autostart") {
                 autostart = val.as_bool().unwrap_or(true);
@@ -275,7 +291,10 @@ impl TtsConfig {
                 voice_male = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("speed") {
-                speed = val.as_f64().map(|v| v as f32);
+                speed = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("autostart") {
                 autostart = val.as_bool().unwrap_or(true);
@@ -284,13 +303,16 @@ impl TtsConfig {
                 mode = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("temperature") {
-                temperature = val.as_f64().map(|v| v as f32);
+                temperature = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("device") {
                 device = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("pitch") {
-                pitch = val.as_i64().map(|v| v as i32);
+                pitch = val.as_i64().and_then(|v| i32::try_from(v).ok());
             }
         }
 
@@ -305,6 +327,138 @@ impl TtsConfig {
             device,
             pitch,
         })
+    }
+}
+
+fn require_config_string(
+    section: &str,
+    key: &str,
+    value: &serde_yaml::Value,
+) -> anyhow::Result<()> {
+    if value.as_str().is_none() {
+        anyhow::bail!("{section}.{key} must be a string");
+    }
+    Ok(())
+}
+
+fn require_config_bool(section: &str, key: &str, value: &serde_yaml::Value) -> anyhow::Result<()> {
+    if value.as_bool().is_none() {
+        anyhow::bail!("{section}.{key} must be a boolean");
+    }
+    Ok(())
+}
+
+fn require_config_f32(section: &str, key: &str, value: &serde_yaml::Value) -> anyhow::Result<()> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| anyhow::anyhow!("{section}.{key} must be a number"))?;
+    if !number.is_finite() || number.abs() > f32::MAX as f64 {
+        anyhow::bail!("{section}.{key} must be a finite f32-compatible number");
+    }
+    Ok(())
+}
+
+struct ActiveProviderOptions<'a> {
+    section: &'static str,
+    list: Option<&'a [HashMap<String, serde_yaml::Value>]>,
+    allowed: &'static [&'static str],
+}
+
+impl TtsConfig {
+    fn validate_active_provider_options(&self) -> anyhow::Result<()> {
+        let active = match self.provider.as_str() {
+            "supertonic" => ActiveProviderOptions {
+                section: "tts.supertonic",
+                list: self.supertonic.as_deref(),
+                allowed: &[
+                    "server_url",
+                    "female",
+                    "male",
+                    "lang",
+                    "steps",
+                    "speed",
+                    "autostart",
+                ],
+            },
+            "openai" => ActiveProviderOptions {
+                section: "tts.openai",
+                list: self.openai.as_deref(),
+                allowed: &["api_url", "api_key", "female", "male", "model"],
+            },
+            "vieneu" => ActiveProviderOptions {
+                section: "tts.vieneu",
+                list: self.vieneu.as_deref(),
+                allowed: &[
+                    "server_url",
+                    "female",
+                    "male",
+                    "speed",
+                    "autostart",
+                    "mode",
+                    "temperature",
+                    "device",
+                    "pitch",
+                ],
+            },
+            _ => return Ok(()),
+        };
+
+        let Some(list) = active.list else {
+            return Ok(());
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        for map in list {
+            for (key, value) in map {
+                if !active.allowed.contains(&key.as_str()) {
+                    anyhow::bail!("unknown {} option: {key}", active.section);
+                }
+                if !seen.insert(key.as_str()) {
+                    anyhow::bail!("duplicate {} option: {key}", active.section);
+                }
+
+                match (self.provider.as_str(), key.as_str()) {
+                    ("supertonic", "server_url" | "female" | "male" | "lang")
+                    | ("openai", "api_url" | "api_key" | "female" | "male" | "model")
+                    | ("vieneu", "server_url" | "female" | "male" | "mode" | "device") => {
+                        require_config_string(active.section, key, value)?;
+                    }
+                    ("supertonic" | "vieneu", "autostart") => {
+                        require_config_bool(active.section, key, value)?;
+                    }
+                    ("supertonic", "steps") => {
+                        let raw = value.as_u64().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{}.steps must be a non-negative integer",
+                                active.section
+                            )
+                        })?;
+                        u8::try_from(raw).map_err(|_| {
+                            anyhow::anyhow!(
+                                "{}.steps must fit in an unsigned 8-bit integer",
+                                active.section
+                            )
+                        })?;
+                    }
+                    ("supertonic", "speed") | ("vieneu", "speed" | "temperature") => {
+                        require_config_f32(active.section, key, value)?;
+                    }
+                    ("vieneu", "pitch") => {
+                        let raw = value.as_i64().ok_or_else(|| {
+                            anyhow::anyhow!("{}.pitch must be an integer", active.section)
+                        })?;
+                        i32::try_from(raw).map_err(|_| {
+                            anyhow::anyhow!(
+                                "{}.pitch must fit in a signed 32-bit integer",
+                                active.section
+                            )
+                        })?;
+                    }
+                    _ => unreachable!("allowed option must have a validation branch"),
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -358,11 +512,32 @@ pub struct OpenAiTtsConfig {
 impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("failed to read config file '{}': {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("failed to read config file '{path}': {e}"))?;
         let config: Config = serde_yaml::from_str(&raw)
-            .map_err(|e| anyhow::anyhow!("failed to parse config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn validate_hot_reload_from(&self, current: &Self) -> anyhow::Result<()> {
+        if self.bot.token != current.bot.token {
+            anyhow::bail!("bot.token is startup-only");
+        }
+        if self.bot.application_id != current.bot.application_id {
+            anyhow::bail!("bot.application_id is startup-only");
+        }
+        if self.console_chat != current.console_chat {
+            anyhow::bail!("console_chat is startup-only");
+        }
+        if self.logging.webhook_url != current.logging.webhook_url {
+            anyhow::bail!("logging.webhook_url is startup-only");
+        }
+        if self.rank != current.rank {
+            anyhow::bail!(
+                "rank configuration is startup-only because reconciliation and the monthly scheduler are created at startup"
+            );
+        }
+        Ok(())
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -375,14 +550,52 @@ impl Config {
         if self.permissions.owner_id == 0 {
             anyhow::bail!("permissions.owner_id must be set");
         }
-        if self.rank.enabled && self.rank.ranks.is_empty() {
-            anyhow::bail!("rank.ranks cannot be empty if rank system is enabled");
+        if !matches!(
+            self.tts.provider.as_str(),
+            "msedge" | "gtts" | "supertonic" | "openai" | "vieneu"
+        ) {
+            anyhow::bail!("unsupported tts.provider: {}", self.tts.provider);
+        }
+        if !matches!(self.tts.default_gender.as_str(), "female" | "male") {
+            anyhow::bail!("tts.default_gender must be either 'female' or 'male'");
+        }
+        if self.tts.provider == "gtts" && (self.tts.rate != 0 || self.tts.pitch != 0) {
+            anyhow::bail!("gTTS does not support tts.rate or tts.pitch; both must be 0");
+        }
+        self.tts.validate_active_provider_options()?;
+        match self.tts.provider.as_str() {
+            "supertonic" if self.tts.get_supertonic_config().is_none() => {
+                anyhow::bail!("tts.supertonic must be configured when provider is 'supertonic'");
+            }
+            "openai" if self.tts.get_openai_config().is_none() => {
+                anyhow::bail!("tts.openai must be configured when provider is 'openai'");
+            }
+            "vieneu" if self.tts.get_vieneu_config().is_none() => {
+                anyhow::bail!("tts.vieneu must be configured when provider is 'vieneu'");
+            }
+            _ => {}
+        }
+        if self.ai.enabled && !matches!(self.ai.provider.as_str(), "gemini" | "groq") {
+            anyhow::bail!("unsupported ai.provider: {}", self.ai.provider);
+        }
+        self.rank.validate()?;
+        if self.voice_status.enabled {
+            if self.voice_status.channel_id == 0 {
+                anyhow::bail!("voice_status.channel_id must be set when voice status is enabled");
+            }
+            if self.voice_status.interval_secs == 0 {
+                anyhow::bail!("voice_status.interval_secs must be greater than zero");
+            }
+            if self.voice_status.steps.is_empty() {
+                anyhow::bail!("voice_status.steps cannot be empty when voice status is enabled");
+            }
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RankConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -396,6 +609,35 @@ pub struct RankConfig {
     pub stars_per_rank: u8,
     #[serde(default = "default_ranks")]
     pub ranks: Vec<String>,
+    #[serde(default)]
+    pub guilds: HashMap<String, GuildRankConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GuildRankConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub target_role_id: u64,
+    #[serde(default)]
+    pub leaderboard_channel_id: u64,
+    #[serde(default = "default_stars_per_rank")]
+    pub stars_per_rank: u8,
+    #[serde(default = "default_ranks")]
+    pub ranks: Vec<String>,
+}
+
+impl Default for GuildRankConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            target_role_id: 0,
+            leaderboard_channel_id: 0,
+            stars_per_rank: default_stars_per_rank(),
+            ranks: Vec::new(),
+        }
+    }
 }
 
 fn default_stars_per_rank() -> u8 {
@@ -403,25 +645,172 @@ fn default_stars_per_rank() -> u8 {
 }
 
 fn default_ranks() -> Vec<String> {
-    vec![]
+    Vec::new()
 }
 
-impl RankConfig {
+impl GuildRankConfig {
     pub fn max_level(&self) -> u8 {
-        (self.ranks.len() as u8) * self.stars_per_rank
+        self.ranks
+            .len()
+            .checked_mul(self.stars_per_rank as usize)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(u8::MAX)
     }
 
     pub fn level_to_display(&self, level: u8) -> anyhow::Result<(&str, u8)> {
-        if level == 0 || level > self.max_level() {
-            anyhow::bail!("level {} is out of bounds", level);
+        if self.stars_per_rank == 0 || level == 0 || level > self.max_level() {
+            anyhow::bail!("level {level} is out of bounds");
         }
-        let rank_idx = (level - 1) / self.stars_per_rank;
+        let rank_index = (level - 1) / self.stars_per_rank;
         let stars = (level - 1) % self.stars_per_rank + 1;
-        Ok((&self.ranks[rank_idx as usize], stars))
+        let rank = self
+            .ranks
+            .get(rank_index as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank index {rank_index} is out of bounds"))?;
+        Ok((rank, stars))
+    }
+
+    fn validate(&self, guild_id: u64) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if guild_id == 0 {
+            anyhow::bail!("rank guild id must be non-zero");
+        }
+        if self.target_role_id == 0 {
+            anyhow::bail!("rank target_role_id must be set for guild {guild_id}");
+        }
+        if self.target_role_id == guild_id {
+            anyhow::bail!("rank target_role_id for guild {guild_id} cannot be the @everyone role");
+        }
+        if self.leaderboard_channel_id == 0 {
+            anyhow::bail!("rank leaderboard_channel_id must be set for guild {guild_id}");
+        }
+        if self.stars_per_rank == 0 {
+            anyhow::bail!("rank stars_per_rank must be greater than zero for guild {guild_id}");
+        }
+        if self.ranks.is_empty() {
+            anyhow::bail!("rank ranks cannot be empty for guild {guild_id}");
+        }
+        let total_levels = self
+            .ranks
+            .len()
+            .checked_mul(self.stars_per_rank as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank level count overflow for guild {guild_id}"))?;
+        if total_levels > u8::MAX as usize {
+            anyhow::bail!(
+                "rank configuration for guild {guild_id} supports at most {} total levels",
+                u8::MAX
+            );
+        }
+
+        let mut canonical_ranks = std::collections::HashSet::new();
+        for rank in &self.ranks {
+            if rank.is_empty() || rank.trim() != rank {
+                anyhow::bail!(
+                    "rank names for guild {guild_id} must be non-empty and have no surrounding whitespace"
+                );
+            }
+            let canonical = rank.to_uppercase();
+            if !canonical_ranks.insert(canonical) {
+                anyhow::bail!("rank names for guild {guild_id} must be unique ignoring case");
+            }
+            let longest_prefix = format!("{rank} {} SAO", self.stars_per_rank);
+            if longest_prefix.chars().count() > 32 {
+                anyhow::bail!(
+                    "rank nickname prefix for guild {guild_id} exceeds Discord's 32-character nickname limit"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+impl RankConfig {
+    fn legacy_guild_config(&self) -> GuildRankConfig {
+        GuildRankConfig {
+            enabled: self.enabled,
+            target_role_id: self.target_role_id,
+            leaderboard_channel_id: self.leaderboard_channel_id,
+            stars_per_rank: self.stars_per_rank,
+            ranks: self.ranks.clone(),
+        }
+    }
+
+    pub fn guild_config(&self, guild_id: u64) -> Option<GuildRankConfig> {
+        if !self.enabled || guild_id == 0 {
+            return None;
+        }
+        if let Some(config) = self.guilds.get(&guild_id.to_string()) {
+            return config.enabled.then(|| config.clone());
+        }
+        (self.guild_id == guild_id).then(|| self.legacy_guild_config())
+    }
+
+    pub fn configured_guilds(&self) -> anyhow::Result<Vec<(u64, GuildRankConfig)>> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        let mut configured = Vec::new();
+        for (raw_id, config) in &self.guilds {
+            let guild_id = raw_id
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("invalid rank guild id: {raw_id}"))?;
+            let canonical_id = guild_id.to_string();
+            if guild_id == 0 || raw_id != &canonical_id {
+                anyhow::bail!(
+                    "rank guild id key must use canonical non-zero decimal form: {raw_id}"
+                );
+            }
+            if config.enabled {
+                configured.push((guild_id, config.clone()));
+            }
+        }
+        if self.guild_id != 0 && !self.guilds.contains_key(&self.guild_id.to_string()) {
+            configured.push((self.guild_id, self.legacy_guild_config()));
+        }
+        configured.sort_by_key(|(guild_id, _)| *guild_id);
+        configured.dedup_by_key(|(guild_id, _)| *guild_id);
+        Ok(configured)
+    }
+
+    pub fn legacy_guild_id(&self) -> u64 {
+        self.guild_id
+    }
+
+    pub fn max_level(&self) -> u8 {
+        self.legacy_guild_config().max_level()
+    }
+
+    pub fn level_to_display(&self, level: u8) -> anyhow::Result<(&str, u8)> {
+        if self.stars_per_rank == 0 || level == 0 || level > self.max_level() {
+            anyhow::bail!("level {level} is out of bounds");
+        }
+        let rank_index = (level - 1) / self.stars_per_rank;
+        let stars = (level - 1) % self.stars_per_rank + 1;
+        let rank = self
+            .ranks
+            .get(rank_index as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank index {rank_index} is out of bounds"))?;
+        Ok((rank, stars))
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let configured = self.configured_guilds()?;
+        if configured.is_empty() {
+            anyhow::bail!("rank must configure at least one guild when enabled");
+        }
+        for (guild_id, config) in configured {
+            config.validate(guild_id)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 pub struct VoiceStatusConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -439,7 +828,7 @@ fn default_voice_status_interval() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 pub struct ConsoleChatConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -453,4 +842,412 @@ pub struct LoggingConfig {
     pub webhook_url: String,
     #[serde(default)]
     pub control_channel_id: u64,
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn valid_config() -> Config {
+        serde_yaml::from_str(
+            r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: msedge
+  msedge: []
+"#,
+        )
+        .expect("test config must parse")
+    }
+
+    #[test]
+    fn top_level_tts_typos_are_parse_errors_instead_of_silent_fallbacks() {
+        for (field, value) in [
+            ("provder", "vieneu"),
+            ("max_char", "80"),
+            ("defualt_gender", "male"),
+        ] {
+            let yaml = format!(
+                r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: msedge
+  msedge: []
+  {field}: {value}
+"#
+            );
+            let error = serde_yaml::from_str::<Config>(&yaml)
+                .expect_err("unknown top-level TTS field must be rejected");
+            let message = error.to_string();
+            assert!(
+                message.contains("unknown field") && message.contains(field),
+                "unexpected parse error for {field}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn hot_reload_rejects_startup_owned_sections() {
+        let current = valid_config();
+
+        let mut changed = valid_config();
+        changed.bot.token = "different-token".to_string();
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.bot.application_id = 2;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.console_chat.enabled = true;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.console_chat.default_channel_id = 99;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.logging.webhook_url = "https://example.invalid/webhook".to_string();
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.rank.enabled = true;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+    }
+
+    #[test]
+    fn hot_reload_allows_runtime_owned_sections() {
+        let current = valid_config();
+        let mut changed = valid_config();
+        changed.tts.max_chars = 123;
+        changed.tts.default_gender = "male".to_string();
+        changed.abbreviations.insert("x".into(), "runtime".into());
+        changed.ai.enabled = true;
+        changed.ai.api_key = "test".into();
+        changed.permissions.allowed_users.push(42);
+        changed.voice_status.enabled = true;
+        changed.voice_status.channel_id = 10;
+        changed.voice_status.interval_secs = 30;
+        changed.voice_status.steps = vec!["ready".into()];
+        changed.logging.control_channel_id = 99;
+        assert!(changed.validate_hot_reload_from(&current).is_ok());
+    }
+
+    #[test]
+    fn valid_minimal_config_passes_validation() {
+        valid_config().validate().expect("valid config must pass");
+    }
+
+    #[test]
+    fn rejects_unknown_tts_provider() {
+        let mut config = valid_config();
+        config.tts.provider = "msedeg".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_default_gender() {
+        let mut config = valid_config();
+        config.tts.default_gender = "other".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_gtts_rate_and_pitch() {
+        let mut config = valid_config();
+        config.tts.provider = "gtts".to_string();
+        config.tts.rate = 1;
+        assert!(config.validate().is_err());
+
+        config.tts.rate = 0;
+        config.tts.pitch = 1;
+        assert!(config.validate().is_err());
+
+        config.tts.pitch = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_enabled_ai_provider() {
+        let mut config = valid_config();
+        config.ai.enabled = true;
+        config.ai.provider = "unknown".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_zero_rank_ids_and_zero_stars() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.ranks = vec!["RANK".to_string()];
+        assert!(config.validate().is_err());
+
+        config.rank.guild_id = 1;
+        config.rank.target_role_id = 2;
+        config.rank.leaderboard_channel_id = 3;
+        config.rank.stars_per_rank = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_rank_level_count_above_u8_capacity() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guild_id = 1;
+        config.rank.target_role_id = 2;
+        config.rank.leaderboard_channel_id = 3;
+        config.rank.stars_per_rank = 3;
+        config.rank.ranks = (0..86).map(|index| format!("RANK {index}")).collect();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_rank_math_never_panics_or_wraps() {
+        let rank = RankConfig {
+            enabled: true,
+            guild_id: 1,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: (0..100).map(|index| format!("RANK {index}")).collect(),
+            guilds: HashMap::new(),
+        };
+        assert_eq!(rank.max_level(), u8::MAX);
+
+        let zero_stars = RankConfig {
+            stars_per_rank: 0,
+            ranks: vec!["RANK".to_string()],
+            ..RankConfig::default()
+        };
+        assert!(zero_stars.level_to_display(1).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_enabled_voice_status() {
+        let mut config = valid_config();
+        config.voice_status.enabled = true;
+        config.voice_status.steps = vec!["ready".to_string()];
+        assert!(config.validate().is_err());
+
+        config.voice_status.channel_id = 1;
+        config.voice_status.interval_secs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn multi_guild_rank_config_is_isolated_and_explicit_map_overrides_legacy() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guild_id = 10;
+        config.rank.target_role_id = 100;
+        config.rank.leaderboard_channel_id = 101;
+        config.rank.ranks = vec!["LEGACY".to_string()];
+        config.rank.guilds.insert(
+            "10".to_string(),
+            GuildRankConfig {
+                target_role_id: 200,
+                leaderboard_channel_id: 201,
+                ranks: vec!["OVERRIDE".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        config.rank.guilds.insert(
+            "20".to_string(),
+            GuildRankConfig {
+                target_role_id: 300,
+                leaderboard_channel_id: 301,
+                ranks: vec!["SECOND".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        assert_eq!(config.rank.guild_config(10).unwrap().target_role_id, 200);
+        assert_eq!(config.rank.guild_config(20).unwrap().target_role_id, 300);
+        assert!(config.rank.guild_config(30).is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn noncanonical_rank_guild_key_is_rejected() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "00123".into(),
+            GuildRankConfig {
+                enabled: true,
+                target_role_id: 2,
+                leaderboard_channel_id: 3,
+                stars_per_rank: 3,
+                ranks: vec!["RANK".into()],
+            },
+        );
+        assert!(config.rank.configured_guilds().is_err());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn canonical_rank_guild_key_has_consistent_direct_and_enumerated_lookup() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "123".into(),
+            GuildRankConfig {
+                enabled: true,
+                target_role_id: 20,
+                leaderboard_channel_id: 30,
+                stars_per_rank: 3,
+                ranks: vec!["EXPLICIT".into()],
+            },
+        );
+        let configured = config.rank.configured_guilds().unwrap();
+        let direct = config.rank.guild_config(123).unwrap();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].0, 123);
+        assert_eq!(configured[0].1.target_role_id, direct.target_role_id);
+        assert_eq!(configured[0].1.ranks, direct.ranks);
+    }
+
+    #[test]
+    fn rank_config_rejects_everyone_duplicate_and_unrepresentable_names() {
+        let everyone = GuildRankConfig {
+            enabled: true,
+            target_role_id: 123,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec!["RANK".into()],
+        };
+        assert!(everyone.validate(123).is_err());
+
+        let duplicate = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec!["Bronze".into(), "BRONZE".into()],
+        };
+        assert!(duplicate.validate(123).is_err());
+
+        let whitespace = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec![" BRONZE".into()],
+        };
+        assert!(whitespace.validate(123).is_err());
+
+        let too_long = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 255,
+            ranks: vec!["X".repeat(30)],
+        };
+        assert!(too_long.validate(123).is_err());
+    }
+
+    #[test]
+    fn unknown_rank_fields_are_parse_errors() {
+        assert!(
+            serde_yaml::from_str::<GuildRankConfig>("enabled: true\ntarget_rol_id: 2\n").is_err()
+        );
+        assert!(serde_yaml::from_str::<RankConfig>("enabled: false\nguildz: {}\n").is_err());
+    }
+
+    #[test]
+    fn repository_config_example_parses_and_validates_after_required_placeholders_are_replaced() {
+        let mut config: Config = serde_yaml::from_str(include_str!("../config.example.yml"))
+            .expect("config.example.yml must remain parseable");
+        config.bot.token = "test-token".to_string();
+        config.bot.application_id = 1;
+        config
+            .validate()
+            .expect("config.example.yml must satisfy runtime validation after required placeholders are replaced");
+    }
+
+    fn provider_config(provider: &str, section: &str) -> Config {
+        serde_yaml::from_str(&format!(
+            r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: {provider}
+  msedge: []
+  {provider}:
+{section}
+"#
+        ))
+        .expect("provider test config must parse as generic YAML")
+    }
+
+    #[test]
+    fn rejects_supertonic_steps_that_do_not_fit_u8() {
+        let config = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - steps: 256\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_supertonic_config().unwrap().steps, None);
+    }
+
+    #[test]
+    fn rejects_vieneu_pitch_that_does_not_fit_i32() {
+        let config = provider_config(
+            "vieneu",
+            "    - server_url: http://127.0.0.1:7799\n    - female: Ly\n    - male: Binh\n    - pitch: 4294967296\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_vieneu_config().unwrap().pitch, None);
+    }
+
+    #[test]
+    fn rejects_nonrepresentable_provider_float() {
+        let config = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - speed: 1.0e100\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_supertonic_config().unwrap().speed, None);
+    }
+
+    #[test]
+    fn rejects_wrong_typed_and_unknown_active_provider_options() {
+        let wrong_type = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - autostart: \"false\"",
+        );
+        assert!(wrong_type.validate().is_err());
+
+        let typo = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - autostrat: false",
+        );
+        assert!(typo.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_multi_guild_rank_entry_is_rejected() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "20".to_string(),
+            GuildRankConfig {
+                target_role_id: 0,
+                leaderboard_channel_id: 301,
+                ranks: vec!["SECOND".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        assert!(config.validate().is_err());
+    }
 }

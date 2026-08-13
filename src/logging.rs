@@ -1,15 +1,42 @@
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
+const LOG_QUEUE_CAPACITY: usize = 512;
+const WEBHOOK_CONTENT_LIMIT: usize = 1900;
+const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBHOOK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+const RECEIVE_TICK: Duration = Duration::from_millis(500);
+
 pub struct DiscordLogLayer {
-    sender: mpsc::UnboundedSender<String>,
+    sender: mpsc::Sender<String>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl DiscordLogLayer {
-    pub fn new(sender: mpsc::UnboundedSender<String>) -> Self {
-        Self { sender }
+    fn new(sender: mpsc::Sender<String>, dropped: Arc<AtomicU64>) -> Self {
+        Self { sender, dropped }
+    }
+
+    fn queue(&self, message: String) {
+        queue_nonblocking(&self.sender, &self.dropped, message);
+    }
+}
+
+fn queue_nonblocking(sender: &mpsc::Sender<String>, dropped: &AtomicU64, message: String) {
+    match sender.try_send(message) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {}
     }
 }
 
@@ -21,7 +48,7 @@ struct MessageVisitor {
 impl tracing::field::Visit for MessageVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         let name = field.name();
-        let val_str = format!("{:?}", value);
+        let val_str = format!("{value:?}");
         if name == "message" {
             self.message = val_str;
         } else {
@@ -36,92 +63,322 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let metadata = event.metadata();
-        if metadata.target().starts_with("himeko_bot") {
-            let mut visitor = MessageVisitor { message: String::new(), fields: Vec::new() };
-            event.record(&mut visitor);
-            
-            if !visitor.message.is_empty() {
-                let level = metadata.level().to_string();
-                let target = metadata.target().strip_prefix("himeko_bot::").unwrap_or(metadata.target());
-                
-                // Clean up string representation if it's quoted
-                let mut clean_msg = visitor.message;
-                if clean_msg.starts_with('"') && clean_msg.ends_with('"') && clean_msg.len() >= 2 {
-                    clean_msg = clean_msg[1..clean_msg.len()-1].to_string();
+        if !metadata.target().starts_with("himeko_bot") {
+            return;
+        }
+
+        let mut visitor = MessageVisitor {
+            message: String::new(),
+            fields: Vec::new(),
+        };
+        event.record(&mut visitor);
+        if visitor.message.is_empty() {
+            return;
+        }
+
+        let level = metadata.level().to_string();
+        let target = metadata
+            .target()
+            .strip_prefix("himeko_bot::")
+            .unwrap_or(metadata.target());
+        let mut clean_msg = visitor.message;
+        strip_debug_quotes(&mut clean_msg);
+
+        let mut fields = String::new();
+        for (name, mut value) in visitor.fields {
+            strip_debug_quotes(&mut value);
+            fields.push_str(&format!(" {name}={value}"));
+        }
+        self.queue(format!("**[{level}] {target}:** {clean_msg}{fields}"));
+    }
+}
+
+fn strip_debug_quotes(value: &mut String) {
+    if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+        *value = value[1..value.len() - 1].to_string();
+    }
+}
+
+pub fn start_discord_logging(
+    webhook_url: String,
+) -> (DiscordLogLayer, tokio::task::JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel(LOG_QUEUE_CAPACITY);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let layer = DiscordLogLayer::new(tx, Arc::clone(&dropped));
+    let handle = tokio::spawn(run_worker(webhook_url, rx, dropped));
+    (layer, handle)
+}
+
+async fn run_worker(webhook_url: String, mut rx: mpsc::Receiver<String>, dropped: Arc<AtomicU64>) {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
+        .timeout(WEBHOOK_REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("[DiscordLogger] Failed to build HTTP client: {error}");
+            return;
+        }
+    };
+
+    let mut buffer = String::new();
+    let mut last_send = Instant::now();
+    loop {
+        let received = tokio::time::timeout(RECEIVE_TICK, rx.recv()).await;
+        match received {
+            Ok(Some(message)) => {
+                emit_dropped_notice(&mut buffer, &client, &webhook_url, &dropped).await;
+                append_bounded(&mut buffer, &client, &webhook_url, &message).await;
+                if last_send.elapsed() >= FLUSH_INTERVAL {
+                    flush(&mut buffer, &client, &webhook_url).await;
+                    last_send = Instant::now();
                 }
-                
-                let mut fields_str = String::new();
-                for (name, val) in visitor.fields {
-                    let mut clean_val = val;
-                    if clean_val.starts_with('"') && clean_val.ends_with('"') && clean_val.len() >= 2 {
-                        clean_val = clean_val[1..clean_val.len()-1].to_string();
-                    }
-                    fields_str.push_str(&format!(" {}={}", name, clean_val));
+            }
+            Ok(None) => {
+                emit_dropped_notice(&mut buffer, &client, &webhook_url, &dropped).await;
+                flush(&mut buffer, &client, &webhook_url).await;
+                break;
+            }
+            Err(_) => {
+                emit_dropped_notice(&mut buffer, &client, &webhook_url, &dropped).await;
+                if last_send.elapsed() >= FLUSH_INTERVAL {
+                    flush(&mut buffer, &client, &webhook_url).await;
+                    last_send = Instant::now();
                 }
-                
-                let formatted = format!("**[{}] {}:** {}{}", level, target, clean_msg, fields_str);
-                let _ = self.sender.send(formatted);
             }
         }
     }
 }
 
-pub fn start_discord_logging(webhook_url: String) -> (DiscordLogLayer, tokio::task::JoinHandle<()>) {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let client = reqwest::Client::new();
-    
-    let handle = tokio::spawn(async move {
-        let mut buffer = String::new();
-        let mut last_send = std::time::Instant::now();
-        
-        loop {
-            let msg_opt = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
-            
-            match msg_opt {
-                Ok(Some(msg)) => {
-                    if buffer.len() + msg.len() + 10 > 1900 {
-                        send_to_webhook(&client, &webhook_url, &buffer).await;
-                        buffer.clear();
-                        last_send = std::time::Instant::now();
-                    }
-                    if !buffer.is_empty() {
-                        buffer.push('\n');
-                    }
-                    buffer.push_str(&msg);
-                }
-                Ok(None) => {
-                    if !buffer.is_empty() {
-                        send_to_webhook(&client, &webhook_url, &buffer).await;
-                    }
-                    break;
-                }
-                Err(_) => {
-                    if !buffer.is_empty() && last_send.elapsed() >= std::time::Duration::from_secs(1) {
-                        send_to_webhook(&client, &webhook_url, &buffer).await;
-                        buffer.clear();
-                        last_send = std::time::Instant::now();
-                    }
-                }
-            }
-        }
-    });
-    
-    (DiscordLogLayer::new(tx), handle)
+async fn emit_dropped_notice(
+    buffer: &mut String,
+    client: &reqwest::Client,
+    webhook_url: &str,
+    dropped: &AtomicU64,
+) {
+    let count = dropped.swap(0, Ordering::AcqRel);
+    if count > 0 {
+        append_bounded(
+            buffer,
+            client,
+            webhook_url,
+            &format!("⚠️ Discord logger dropped {count} events due to bounded backpressure."),
+        )
+        .await;
+    }
 }
 
-async fn send_to_webhook(client: &reqwest::Client, url: &str, content: &str) {
-    let payload = serde_json::json!({
-        "content": content
-    });
-    
-    match client.post(url).json(&payload).send().await {
-        Ok(res) => {
-            if !res.status().is_success() {
-                eprintln!("[DiscordLogger] Webhook returned status {}", res.status());
+async fn append_bounded(
+    buffer: &mut String,
+    client: &reqwest::Client,
+    webhook_url: &str,
+    message: &str,
+) {
+    for chunk in split_unicode(message, WEBHOOK_CONTENT_LIMIT) {
+        let separator = usize::from(!buffer.is_empty());
+        if buffer.chars().count() + separator + chunk.chars().count() > WEBHOOK_CONTENT_LIMIT {
+            flush(buffer, client, webhook_url).await;
+        }
+        if !buffer.is_empty() {
+            buffer.push('\n');
+        }
+        buffer.push_str(&chunk);
+        if buffer.chars().count() >= WEBHOOK_CONTENT_LIMIT {
+            flush(buffer, client, webhook_url).await;
+        }
+    }
+}
+
+fn split_unicode(input: &str, max_chars: usize) -> Vec<String> {
+    if input.is_empty() || max_chars == 0 {
+        return Vec::new();
+    }
+    let chars = input.chars().collect::<Vec<_>>();
+    chars
+        .chunks(max_chars)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
+}
+
+async fn flush(buffer: &mut String, client: &reqwest::Client, webhook_url: &str) {
+    if buffer.is_empty() {
+        return;
+    }
+    let content = std::mem::take(buffer);
+    if let Err(error) = send_to_webhook(client, webhook_url, &content).await {
+        eprintln!("[DiscordLogger] Failed to send logs to webhook: {error}");
+    }
+}
+
+fn webhook_payload(content: &str) -> serde_json::Value {
+    serde_json::json!({
+        "content": content,
+        "allowed_mentions": {
+            "parse": []
+        }
+    })
+}
+
+async fn send_to_webhook(client: &reqwest::Client, url: &str, content: &str) -> anyhow::Result<()> {
+    if content.is_empty() {
+        return Ok(());
+    }
+    let response = client
+        .post(url)
+        .json(&webhook_payload(content))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        anyhow::bail!("webhook returned status {}", response.status());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn unicode_split_preserves_content_and_character_limit() {
+        let input = "🔥xin chào🙂".repeat(500);
+        let chunks = split_unicode(&input, 37);
+        assert!(!chunks.is_empty());
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 37));
+        assert_eq!(chunks.concat(), input);
+    }
+
+    #[test]
+    fn webhook_payload_suppresses_all_mentions() {
+        let payload = webhook_payload("console: <@123> @everyone <@&456>");
+        assert_eq!(payload["content"], "console: <@123> @everyone <@&456>");
+        assert_eq!(payload["allowed_mentions"]["parse"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn webhook_request_disables_mentions_for_logged_user_content() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let header_end = loop {
+                if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break index + 4;
+                }
+                let mut chunk = [0u8; 2048];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "connection closed before headers completed");
+                bytes.extend_from_slice(&chunk[..read]);
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .expect("request must include Content-Length");
+            while bytes.len() < header_end + content_length {
+                let mut chunk = [0u8; 2048];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "connection closed before body completed");
+                bytes.extend_from_slice(&chunk[..read]);
             }
-        }
-        Err(e) => {
-            eprintln!("[DiscordLogger] Failed to send logs to Webhook: {}", e);
-        }
+            let body = serde_json::from_slice::<serde_json::Value>(
+                &bytes[header_end..header_end + content_length],
+            )
+            .expect("webhook request body must be JSON");
+            socket
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            body
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        send_to_webhook(
+            &client,
+            &format!("http://{address}/webhook"),
+            "console: <@123> @everyone",
+        )
+        .await
+        .unwrap();
+        let body = server.await.unwrap();
+        assert_eq!(body["content"], "console: <@123> @everyone");
+        assert_eq!(body["allowed_mentions"]["parse"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn bounded_queue_drops_without_blocking_or_growing() {
+        let (tx, _rx) = mpsc::channel(1);
+        let dropped = AtomicU64::new(0);
+        queue_nonblocking(&tx, &dropped, "first".into());
+        queue_nonblocking(&tx, &dropped, "second".into());
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(tx.capacity(), 0);
+    }
+
+    #[tokio::test]
+    async fn oversized_single_event_is_sent_as_nonempty_bounded_payloads() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0u8; 8192];
+                let read = socket.read(&mut request).await.unwrap();
+                let text = String::from_utf8_lossy(&request[..read]);
+                let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                bodies.push(body);
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            bodies
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let url = format!("http://{address}/webhook");
+        let mut buffer = String::new();
+        let input = "🙂".repeat(WEBHOOK_CONTENT_LIMIT * 2 + 1);
+        append_bounded(&mut buffer, &client, &url, &input).await;
+        flush(&mut buffer, &client, &url).await;
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies.iter().all(|body| !body.contains("\"content\":\"\"")));
+    }
+
+    #[tokio::test]
+    async fn webhook_request_timeout_is_enforced() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                let _socket = socket;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let started = Instant::now();
+        let result = send_to_webhook(&client, &format!("http://{address}/webhook"), "x").await;
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

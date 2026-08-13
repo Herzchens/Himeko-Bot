@@ -8,7 +8,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 /// Kiểm tra độ trễ của bot
 #[poise::command(slash_command, guild_only)]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
-    let config = ctx.data().config.read().await;
+    let config = ctx.data().config_snapshot().await;
     let level = UserLevel::of(ctx.author().id.get(), &config);
 
     if !level.can_use_tts() {
@@ -23,7 +23,11 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
 
     let before = std::time::Instant::now();
     let reply = ctx
-        .send(CreateReply::default().content("🏓 Đang đo...").ephemeral(true))
+        .send(
+            CreateReply::default()
+                .content("🏓 Đang đo...")
+                .ephemeral(true),
+        )
         .await?;
     let http_latency = before.elapsed();
 

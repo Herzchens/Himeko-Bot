@@ -1,31 +1,33 @@
 bot:
   # Token của bot (Lấy từ Discord Developer Portal)
   token: "YOUR_DISCORD_BOT_TOKEN"
-  
+
   # Application ID của bot
   application_id: 1234567890123456789
 
 permissions:
   # ID tài khoản Discord của BẠN (vào Discord, chuột phải vào avatar của bạn -> Copy User ID)
   owner_id: 111222333444555
-  
+
   # Danh sách ID những người được phép xài bot (có thể để trống)
   allowed_users: []
 
 tts:
-  # Chọn engine: "gtts" | "msedge" | "supertonic"
+  # Chọn engine: "gtts" | "msedge" | "supertonic" | "openai" | "vieneu"
   provider: "msedge"
 
   # Giọng mặc định khi bot khởi động: "female" hoặc "male"
   default_gender: "female"
 
-  # Tốc độ đọc: 0 (bình thường), 20 (nhanh hơn 20%), -20 (chậm hơn 20%)
+  # Tốc độ đọc: 0 (bình thường), 20 (nhanh hơn 20%), -20 (chậm hơn 20%). gTTS yêu cầu 0.
   rate: 0
 
-  # Cao độ giọng: 0 (bình thường), đơn vị Hz
+  # Cao độ giọng: 0 (bình thường), đơn vị Hz. gTTS yêu cầu 0.
   pitch: 0
 
-  # Giới hạn ký tự (0 = không giới hạn)
+  # Giới hạn ký tự hiển thị (extended grapheme cluster) của một message sau filter/normalize.
+  # Vượt giới hạn thì reject nguyên message, không truncate. 0 = không giới hạn.
+  # Provider vẫn tự chia nhỏ input đã được chấp nhận theo giới hạn an toàn riêng (ví dụ gTTS/Edge).
   max_chars: 0
 
   # Định dạng audio (Không nên đổi nếu không hiểu rõ)
@@ -58,7 +60,7 @@ tts:
     - model: "tts-1"
 
   # --- VieNeu-TTS config (TTS local CPU-optimized server) ---
-  # Cần chạy: pip install vieneu && python vieneu_server.py
+  # Cài dependency được Himeko hỗ trợ: pip install -r requirements-vieneu.txt
   vieneu:
     - server_url: "http://127.0.0.1:7799"
     - female: "Ly" # Giọng nữ. Cho standard/gpu mặc định dùng "Ly" (Trúc Ly). Cho turbo/turbo_gpu hãy dùng "Bích Ngọc" hoặc "Thục Đoan". (Hoặc path âm thanh wav/mp3 để clone)
@@ -118,9 +120,11 @@ ai:
 
 rank:
   enabled: true
+
+  # Cấu hình legacy một server. Vẫn được hỗ trợ để database.yml cũ có thể migrate an toàn.
   guild_id: 123456789012345678
-  target_role_id: 123456789012345678
-  leaderboard_channel_id: 123456789012345678
+  target_role_id: 223456789012345678
+  leaderboard_channel_id: 323456789012345678
   stars_per_rank: 3
   ranks:
     - "CHÓ NÁT"
@@ -128,6 +132,26 @@ rank:
     - "CHÓ RÁCH"
     - "CHÓ ĐIÊN"
     - "CHÓ TRÙM"
+
+  # Multi-server: thêm từng guild vào map này. ID phải đặt trong dấu nháy.
+  # Nếu cùng ID xuất hiện ở đây và guild_id legacy phía trên, cấu hình trong guilds được ưu tiên.
+  # guilds:
+  #   "111111111111111111":
+  #     enabled: true
+  #     target_role_id: 222222222222222222
+  #     leaderboard_channel_id: 333333333333333333
+  #     stars_per_rank: 3
+  #     ranks:
+  #       - "CHÓ NÁT"
+  #       - "CHÓ RÁCH"
+  #   "444444444444444444":
+  #     enabled: true
+  #     target_role_id: 555555555555555555
+  #     leaderboard_channel_id: 666666666666666666
+  #     stars_per_rank: 3
+  #     ranks:
+  #       - "BRONZE"
+  #       - "SILVER"
 
 # --- Voice Status rotation config ---
 voice_status:
@@ -150,4 +174,4 @@ console_chat:
 # --- Discord Logging Webhook ---
 logging:
   webhook_url: "" # Discord Webhook URL to stream bot console logs to a private server channel
-  control_channel_id: 0 # (Optional) ID of a dedicated Discord channel to act as the remote console chat bridge
+  control_channel_id: 0 # (Optional) ID of a dedicated Discord channel to act as the remote console chat bridge

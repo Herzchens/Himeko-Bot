@@ -93,18 +93,22 @@ See `config.example.yml` for the full configuration helper.
 
 VieNeu-TTS is a state-of-the-art Vietnamese TTS engine integrated into Himeko Bot. It supports high-quality offline voices (`Ly`, `Binh`) and can be run with GPU (CUDA) acceleration on Windows:
 
-### 1. Automatic Python 3.12 Virtual Environment Setup
-Since Windows environments can have conflicts with global Python versions (e.g. 3.13 or 3.14), you should set up a local Python 3.12 environment using Scoop:
+### 1. Python 3.12 Virtual Environment Setup
+Himeko's bundled `vieneu_server.py` is validated against **VieNeu 2.7.0**. Do not install an unpinned/latest VieNeu release into this environment; newer major releases have a different dependency/runtime contract.
+
+Create the local environment with Python 3.12 and install the tested CPU dependency set:
 ```powershell
-# Set up a local Python 3.12 virtual environment and install dependencies
-.\setup_venv.ps1
+py -3.12 -m venv venv
+.\venv\Scripts\python.exe -m pip install --upgrade pip
+.\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt
 ```
 
-### 2. Enabling GPU (CUDA) Acceleration (Optional but Recommended)
-For ultra-fast, high-quality synthesis, install the PyTorch + CUDA package inside the virtual environment:
+### 2. Enabling GPU (CUDA) Acceleration (Optional)
+For the `fast`/LMDeploy mode, add the GPU extra from the **same supported VieNeu 2.7.0 release**:
 ```powershell
-.\venv\Scripts\python.exe -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+.\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt "vieneu[gpu]==2.7.0"
 ```
+The dependency/import path is validated on Windows/Python 3.12. Actual CUDA inference still depends on a compatible NVIDIA driver/GPU and the upstream VieNeu/LMDeploy runtime; CPU `turbo` remains the portable default.
 
 ### 3. Running & Configuration
 Set the TTS provider to `"vieneu"` in your `config.yml`:
@@ -113,14 +117,15 @@ tts:
   provider: "vieneu"
   vieneu:
     - server_url: "http://127.0.0.1:7799"
-      voice_female: "Ly"
-      voice_male: "Binh"
-      autostart: true  # Automatically starts vieneu_server.py in the background
+      female: "Ly"
+      male: "Binh"
+      autostart: true  # Only auto-starts for loopback URLs; remote URLs are never mapped to localhost
       device: "cuda"   # "cpu" | "cuda"
       mode: "fast"     # "turbo" (CPU) | "fast" (LMDeploy GPU accelerated)
       temperature: 0.3 # 0.3 for stable intonation, 0.0 for natural randomness
+      pitch: 0         # Non-zero VieNeu pitch is rejected; the old resampling path changed duration/speed
 ```
-When `autostart` is enabled, the bot automatically spawns and manages the VieNeu-TTS server in the background and pipes logs to `vieneu_server.log` and `vieneu_server_err.log`.
+When loopback `autostart` is enabled, the bot owns a shared process lease for `vieneu_server.py`, reuses that process across `/reload`, checks `/healthz` before declaring it ready, and stops/reaps the child only after the final engine lease is dropped. Logs are written to `vieneu_server.log` and `vieneu_server_err.log`.
 
 ### 4. Performance Tuning for Realtime TTS
 
@@ -130,13 +135,13 @@ For low-latency TTS (<2s per message), apply these settings:
 |---|---|---|
 | `max_chars` | `120–180` | Longer text = longer inference. 160 is a good balance |
 | `mode` | `"fast"` + `device: "cuda"` | Best quality with Ly/Binh voices. Use `"turbo"` + `"cpu"` only if GPU is busy (gaming) |
-| `memory_util` | `0.05` | Limits LMDeploy KV cache to 5% VRAM — enough for short TTS, saves gigabytes for games |
+| LMDeploy KV cache | `0.05` (server default) | `vieneu_server.py` currently fixes this internally for `fast`/`gpu`; it is not a YAML option |
 | `temperature` | `0.3` | Stable intonation without randomness artifacts |
 
 **Architecture optimizations applied:**
-- TTS synthesis runs **outside** the per-guild queue lock — multiple messages synthesize in parallel
+- TTS synthesis remains parallel but bounded: **3 per guild / 12 process-wide**, with admission order preserved for playback
 - Preset voice data is **cached at server startup** — no per-request `list_preset_voices()` calls
-- HTTP requests use a **5s timeout** with max 2 attempts (200ms retry delay) for fail-fast behavior
+- VieNeu synthesis requests use a **30s deadline** with max 2 attempts (200ms retry delay); startup readiness uses bounded `/healthz` probes
 - Discord API member fetches are **skipped** in the TTS filter hot path — uses `global_name` directly
 - Config and normalizer `RwLock` guards are **cloned early** (Arc increment) to minimize contention with `/reload`
 

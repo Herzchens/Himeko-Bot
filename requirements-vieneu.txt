@@ -1,0 +1,5 @@
+--extra-index-url https://pnnbao97.github.io/llama-cpp-python-v0.3.16/cpu/
+vieneu==2.7.0
+fastapi
+uvicorn
+numpy

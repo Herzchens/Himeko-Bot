@@ -2,21 +2,21 @@
 name         = "himeko-bot"
 version      = "0.1.0"
 edition      = "2021"
-rust-version = "1.83"
+rust-version = "1.88"
 license      = "GPL-3.0"
 description  = "A personal Discord TTS bot for Vietnamese text-to-speech - Himeko Bot"
 
 [dependencies]
 # Discord
 serenity = { version = "0.12.5", default-features = false, features = [
-    "client", "gateway", "rustls_backend", "model", "cache", "voice",
+    "client", "gateway", "native_tls_backend", "model", "cache", "voice",
 ]}
-poise     = "0.6.2"
-songbird  = { version = "0.6", features = ["serenity", "rustls", "builtin-queue"] }
+poise     = { version = "0.6.2", default-features = false, features = ["cache", "chrono", "handle_panics"] }
+songbird  = { version = "0.6", default-features = false, features = ["driver", "gateway", "native", "serenity", "tungstenite", "builtin-queue"] }
 symphonia = { version = "0.5.5", features = ["mp3", "wav"] }
 
 # TTS
-msedge-tts = "0.3"
+msedge-tts = { path = "vendor/msedge-tts", default-features = false, features = ["tokio-runtime"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -31,6 +31,7 @@ dashmap = "6"
 
 # Text processing
 regex = "1.11"
+unicode-segmentation = "=1.13.2"
 
 # Logging
 tracing            = "0.1"
@@ -39,8 +40,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Misc
 async-trait = "0.1"
 serde_yaml = "0.9.34"
+atomic-write-file = "0.3.0"
 serde_json = "1.0.149"
-reqwest = { version = "0.13.3", features = ["json", "rustls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "query", "rustls-no-provider"] }
 urlencoding = "2.1.3"
 rustls = { version = "0.23", features = ["ring"] }
 lingua = { version = "1.8.0", default-features = false, features = ["english", "vietnamese"] }
