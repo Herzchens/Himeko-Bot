@@ -1,63 +1,79 @@
 # Himeko Bot
 
-> A personal Discord bot written in Rust — reads your messages aloud and answers your questions.  
-> **Work in progress.** **#J4F Project, don't take it seriously, Partically made by AI**
+> A personal Discord bot written in Rust for text-to-speech, AI chat, voice-session utilities, rank management, and small server tools.
+>
+> **Work in progress.** **#J4F project — partially made with AI.**
 
 ---
 
 ## Features
 
-- **Advanced Text-to-Speech (TTS) Engine Dispatcher** — Supports multiple backends:
-  - **gTTS** — Standard Google TTS engine
-  - **MsEdge** — Microsoft Edge high-quality neural voices
-  - **Supertonic** — Local/remote Supertonic fast-synthesis engine
-  - **OpenAI-Compatible** — Supports custom OpenAI-compatible TTS APIs (like F5-TTS or viXTTS)
-  - **VieNeu-TTS** — Local state-of-the-art Vietnamese TTS engine with high-quality presets (`Ly`, `Binh`) supporting CPU, CUDA (GPU), and LMDeploy acceleration
-- **Automatic Server Control** — Automatically spawns and monitors background `supertonic` or `vieneu_server.py` subprocesses on configured ports if they are not already running
-- **Comprehensive Emoji Filtering** — Intelligently parses Discord emojis:
-  - **Unicode Emojis** (`😂`, `👍`, etc.) are filtered out dynamically to prevent TTS engines from babbling English Unicode names
-  - **Custom Guild Emojis** (`<:pepe_L:1234...>` or `<a:pepe:1234...>`) are cleanly expanded into their descriptive text names (`pepe L`, `pepe`)
-- **Per-User Voice Gender Selection** — Stores TTS gender preferences per `UserId` dynamically across guilds rather than simple global/guild-wide defaults
-- **Robust Auto-Rejoin** — Automatically detects sudden voice channel disconnections and attempts a reconnect with exponential backoff (1s, 2s, 4s)
-- **Bilingual Auto-Detection** — Automatically switches between Vietnamese and English voices without manual commands
-- **AI Chat Integration** — Supports Gemini and Groq backend AI responses via slash commands or direct bot `@mention`
-- **Rank System** — Automatically manages member nicknames and ranks based on tier/star level configurations
-- **Hot-Reload Support** — Instantly reload settings from `config.yml` on the fly using `/reload`
-- **Custom Valorant Matchmaker** — Random maps and player splitting for standard competitive matches
+- **Multi-backend Text-to-Speech (TTS)**
+  - **gTTS** — lightweight Google TTS backend
+  - **MsEdge** — Microsoft Edge neural voices
+  - **Supertonic** — local or remote Supertonic synthesis server
+  - **OpenAI-compatible** — custom OpenAI-compatible TTS APIs such as F5-TTS or viXTTS
+  - **VieNeu-TTS** — Vietnamese TTS with local CPU/GPU modes and supported presets such as `Ly` and `Binh`
+- **Per-guild voice sessions** with isolated runtime state and guarded session ownership
+- **Bounded TTS scheduling** with ordered playback and process-wide/per-guild concurrency limits
+- **Automatic local TTS server lifecycle** for supported loopback Supertonic/VieNeu configurations
+- **Voice auto-rejoin** with bounded retry/backoff after unexpected disconnects
+- **Vietnamese/English auto-detection** for TTS voice selection
+- **Emoji and text normalization** for cleaner spoken output
+- **Per-user voice gender preference**
+- **AI chat integration** through Gemini or Groq via `/ask` and direct bot mentions
+- **Discord mention safety** for AI output and webhook logging
+- **Multi-guild rank system** with nickname/rank reconciliation and persistence
+- **Atomic hot reload** through `/reload` for reload-safe configuration
+- **Console chat bridge and webhook logging**
+- **Valorant custom matchmaker** with random team/map generation
+
 ---
 
 ## Commands
 
+Himeko currently registers 14 global slash commands.
+
 | Command | Description |
 |---|---|
-| `/ask <question>` | Ask the AI a question directly |
-| `/reload` | Reload `config.yml` without restarting the bot |
-| `@Himeko <message>` | Mention the bot in chat to trigger an AI response |
-|`/gender <gender>` | Change the gender of the TTS (gTTS doesn't have gender) |
-| `/join` | Make bot joins the voice room |
-| `/leave` | Make bot leaves the voice room |
-| `/up @user1 @user2 ...` | Increase rank by 1 level (Admin) |
-| `/down @user1 @user2 ...` | Decrease rank by 1 level (Admin) |
-| `/remove @user1 @user2 ...` | Remove rank and restore original name (Admin) |
-| `/leaderboard` | Display server rank leaderboard |
-| `/autorename on\|off` | Toggle auto-rename guard (Admin) |
+| `/ask <question>` | Ask the configured AI provider a question |
+| `/ping` | Show Discord WebSocket and HTTP latency |
+| `/join` | Join your current voice channel and start a TTS session |
+| `/leave` | Leave the active voice session when you are allowed to control it |
+| `/gender <gender>` | Change your preferred TTS voice gender |
+| `/reload` | Atomically reload reload-safe settings from `config.yml` |
+| `/echo <message>` | Send a message as the bot; owner-only |
+| `/makecustom` | Create randomized Valorant teams and choose a map |
+| `/up @user...` | Increase rank level for one or more users; Administrator required |
+| `/down @user...` | Decrease rank level for one or more users; Administrator required |
+| `/remove @user...` | Remove rank state and restore nickname state; Administrator required |
+| `/rescan` | Reconcile the current guild's member nicknames with rank storage; Administrator required |
+| `/leaderboard` | Display the current guild's rank leaderboard |
+| `/autorename on\|off` | Toggle automatic rank nickname enforcement; Administrator required |
 
-Bot needs **Manage Nicknames** and **Manage Roles** permissions for the rank system.
+You can also mention Himeko directly, for example `@Himeko <message>`, to use the AI mention path when AI access is enabled for your account.
 
+### Permissions
 
-TTS is passive — just type in a watched text channel while Himeko is in your voice channel.
+Himeko has three application-level user access levels:
+
+- **Owner** — full bot-level access, including `/echo` and session preemption
+- **Allowed user** — TTS, AI, join, and own-session controls
+- **Unknown user** — no TTS/AI/session-control access
+
+Rank administration additionally checks Discord **Administrator** permission. The bot itself needs suitable guild permissions, including **Manage Nicknames** and **Manage Roles**, for rank operations.
 
 ---
 
 ## Tech Stack
 
-- **Language**: Rust
-- **Discord library**: [Serenity](https://github.com/serenity-rs/serenity)
-- **Voice**: [Songbird](https://github.com/serenity-rs/songbird)
-- **AI backends**: Google Gemini, Groq
-- **Config**: `serde_yaml`
-- **Async runtime**: Tokio
-- **Logging**: `tracing`
+- **Language:** Rust
+- **Discord:** Serenity + Poise
+- **Voice:** Songbird
+- **AI backends:** Google Gemini, Groq
+- **Configuration:** `serde_yaml`
+- **Async runtime:** Tokio
+- **Logging:** `tracing`
 
 ---
 
@@ -66,90 +82,203 @@ TTS is passive — just type in a watched text channel while Himeko is in your v
 ### Prerequisites
 
 - Rust toolchain (`rustup`)
-- `ffmpeg` installed and available in `PATH`
-- A Discord bot token
-- An API key for at least one AI provider (Gemini or Groq)
+- `ffmpeg` available in `PATH`
+- A Discord bot token and application ID
+- An API key for Gemini or Groq if AI is enabled
+- Provider-specific dependencies if using a local TTS backend
 
 ### Setup
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/Herzchens/Himeko-Bot
+# 1. Clone the repository
+git clone https://github.com/Herzchens/Himeko-Bot.git
 cd Himeko-Bot
 
-# 2. Copy and fill in the config
+# 2. Create your local configuration
 cp config.example.yml config.yml
-# Edit config.yml with your tokens and preferred settings
+# Edit config.yml and replace the example values
 
 # 3. Build and run
 cargo run --release
 ```
 
-See `config.example.yml` for the full configuration helper.
+`config.yml` and local runtime/database files should not be committed with production secrets.
+
+See [`config.example.yml`](./config.example.yml) for the current configuration schema and examples.
+
+---
+
+## Configuration Notes
+
+### TTS provider validation
+
+Supported `tts.provider` values are:
+
+```text
+gtts
+msedge
+supertonic
+openai
+vieneu
+```
+
+Himeko validates active-provider settings at startup and during reload instead of silently accepting invalid provider options.
+
+For **gTTS**, both top-level values must remain zero because gTTS does not support rate or pitch adjustment:
+
+```yaml
+tts:
+  provider: "gtts"
+  rate: 0
+  pitch: 0
+```
+
+### Hot reload
+
+`/reload` validates the new configuration before replacing runtime state. Some settings are intentionally **startup-only** and require a full process restart when changed:
+
+- `bot.token`
+- `bot.application_id`
+- `console_chat`
+- `logging.webhook_url`
+- the complete `rank` configuration
+
+Other reload-safe settings are applied atomically only after validation succeeds.
+
+### Multi-guild rank configuration
+
+The legacy single-guild rank fields are still supported, while `rank.guilds` can define independent rank configuration for multiple guilds. When the same guild is present in both forms, the explicit `rank.guilds` entry takes precedence.
+
+Each enabled rank guild requires a non-zero target role, leaderboard channel, at least one rank name, and a positive `stars_per_rank` value.
 
 ---
 
 ## VieNeu-TTS Setup & Acceleration
 
-VieNeu-TTS is a state-of-the-art Vietnamese TTS engine integrated into Himeko Bot. It supports high-quality offline voices (`Ly`, `Binh`) and can be run with GPU (CUDA) acceleration on Windows:
+Himeko's bundled `vieneu_server.py` is validated against **VieNeu 2.7.0**. Do not install an unpinned/latest VieNeu release into this environment because newer releases may use a different dependency or runtime contract.
 
-### 1. Python 3.12 Virtual Environment Setup
-Himeko's bundled `vieneu_server.py` is validated against **VieNeu 2.7.0**. Do not install an unpinned/latest VieNeu release into this environment; newer major releases have a different dependency/runtime contract.
+### 1. Python 3.12 environment
 
-Create the local environment with Python 3.12 and install the tested CPU dependency set:
+Windows example:
+
 ```powershell
 py -3.12 -m venv venv
 .\venv\Scripts\python.exe -m pip install --upgrade pip
 .\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt
 ```
 
-### 2. Enabling GPU (CUDA) Acceleration (Optional)
-For the `fast`/LMDeploy mode, add the GPU extra from the **same supported VieNeu 2.7.0 release**:
+### 2. Optional GPU dependencies
+
+For the supported VieNeu 2.7.0 GPU extra:
+
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements-vieneu.txt "vieneu[gpu]==2.7.0"
 ```
-The dependency/import path is validated on Windows/Python 3.12. Actual CUDA inference still depends on a compatible NVIDIA driver/GPU and the upstream VieNeu/LMDeploy runtime; CPU `turbo` remains the portable default.
 
-### 3. Running & Configuration
-Set the TTS provider to `"vieneu"` in your `config.yml`:
+Actual CUDA/LMDeploy availability still depends on your NVIDIA driver, GPU, Python environment, and upstream VieNeu runtime.
+
+### 3. Configuration
+
+Example:
+
 ```yaml
 tts:
   provider: "vieneu"
+  rate: 0
+  pitch: 0
   vieneu:
     - server_url: "http://127.0.0.1:7799"
       female: "Ly"
       male: "Binh"
-      autostart: true  # Only auto-starts for loopback URLs; remote URLs are never mapped to localhost
-      device: "cuda"   # "cpu" | "cuda"
-      mode: "fast"     # "turbo" (CPU) | "fast" (LMDeploy GPU accelerated)
-      temperature: 0.3 # 0.3 for stable intonation, 0.0 for natural randomness
-      pitch: 0         # Non-zero VieNeu pitch is rejected; the old resampling path changed duration/speed
+      speed: 1.0
+      autostart: true
+      mode: "fast"
+      device: "cuda"
+      temperature: 0.3
+      pitch: 0
 ```
-When loopback `autostart` is enabled, the bot owns a shared process lease for `vieneu_server.py`, reuses that process across `/reload`, checks `/healthz` before declaring it ready, and stops/reaps the child only after the final engine lease is dropped. Logs are written to `vieneu_server.log` and `vieneu_server_err.log`.
 
-### 4. Performance Tuning for Realtime TTS
+Notes:
 
-For low-latency TTS (<2s per message), apply these settings:
+- Local autostart is intended for loopback server URLs; remote provider URLs are not remapped to localhost.
+- Readiness is verified through the provider health endpoint before the engine is considered available.
+- Shared local-process ownership is preserved across safe reload transitions.
+- Non-zero VieNeu `pitch` is rejected by the current runtime contract.
+- CPU `turbo` remains the most portable mode; accelerated modes depend on the local VieNeu installation and hardware.
 
-| Setting | Recommended | Why |
+### 4. Realtime TTS tuning
+
+| Setting | Suggested value | Notes |
 |---|---|---|
-| `max_chars` | `120–180` | Longer text = longer inference. 160 is a good balance |
-| `mode` | `"fast"` + `device: "cuda"` | Best quality with Ly/Binh voices. Use `"turbo"` + `"cpu"` only if GPU is busy (gaming) |
-| LMDeploy KV cache | `0.05` (server default) | `vieneu_server.py` currently fixes this internally for `fast`/`gpu`; it is not a YAML option |
-| `temperature` | `0.3` | Stable intonation without randomness artifacts |
+| `max_chars` | `120–180` | Keeps individual synthesis requests reasonably small |
+| `mode` | `fast` on a supported GPU | Use CPU `turbo` when GPU acceleration is unavailable |
+| `temperature` | `0.3` | Stable default for supported VieNeu presets |
 
-**Architecture optimizations applied:**
-- TTS synthesis remains parallel but bounded: **3 per guild / 12 process-wide**, with admission order preserved for playback
-- Preset voice data is **cached at server startup** — no per-request `list_preset_voices()` calls
-- VieNeu synthesis requests use a **30s deadline** with max 2 attempts (200ms retry delay); startup readiness uses bounded `/healthz` probes
-- Discord API member fetches are **skipped** in the TTS filter hot path — uses `global_name` directly
-- Config and normalizer `RwLock` guards are **cloned early** (Arc increment) to minimize contention with `/reload`
+Runtime scheduling is bounded to avoid unbounded synthesis fan-out: up to **3 concurrent synthesis jobs per guild** and **12 process-wide**, while preserving admission order for playback.
+
+---
+
+## Production Deployment
+
+For a small Linux server, Himeko can be deployed as a release binary rather than keeping the full source tree in the runtime directory.
+
+Build natively on the target Linux environment or in a compatible Linux CI/build environment:
+
+```bash
+cargo build --release
+```
+
+Optional production size reduction:
+
+```bash
+strip target/release/himeko-bot
+```
+
+A minimal `systemd` service can use the directory containing `himeko-bot`, `config.yml`, and `database.yml` as its working directory:
+
+```ini
+[Unit]
+Description=Himeko Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/himeko-bot-app
+ExecStart=/path/to/himeko-bot-app/himeko-bot
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Keep a known-good binary backup before replacing a production executable.
+
+---
+
+## Validation
+
+The repository includes a hardening CI workflow covering:
+
+- `cargo fmt --check`
+- `cargo check --all-targets`
+- `cargo clippy --all-targets -- -D warnings`
+- debug tests
+- release tests
+- diff hygiene
+
+The hardened runtime baseline has also been validated with native Windows builds, native Ubuntu release builds, and live Discord runtime checks including multi-guild voice sessions.
+
+### Dependency security
+
+`cargo audit` may report advisories originating from upstream/transitive dependencies. These should be investigated rather than suppressed solely to make the audit output green.
 
 ---
 
 ## Project Status
 
-This bot is under active development. Things may break, change, or disappear between commits.
+Himeko is an actively developed personal project. Configuration and provider contracts may change between releases; use `config.example.yml` from the same commit as the binary you deploy.
 
 ---
 
