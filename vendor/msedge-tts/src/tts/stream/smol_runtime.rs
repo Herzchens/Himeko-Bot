@@ -25,7 +25,7 @@ pub struct SenderAsync<T> {
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> SenderAsync<T> {
-    /// Synthesize text to speech with a [SpeechConfig] asynchronously.  
+    /// Synthesize text to speech with a [SpeechConfig] asynchronously.
     /// **Caution**: One [send](Self::send) corresponds to multiple [read](ReceiverAsync::read). Next [send](Self::send) call will block until there no data to read.
     /// [read](ReceiverAsync::read) will block before you call a [send](Self::send).
     pub async fn send(&mut self, text: &str, config: &SpeechConfig) -> Result<()> {
@@ -57,7 +57,7 @@ pub struct ReceiverAsync<T> {
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> ReceiverAsync<T> {
-    /// Read Synthesized Audio asynchronously.  
+    /// Read Synthesized Audio asynchronously.
     /// **Caution**: One [send](SenderAsync::send) corresponds to multiple [read](Self::read). Next [send](SenderAsync::send) call will block until there no data to read.
     /// [read](Self::read) will block before you call a [send](SenderAsync::send).
     pub async fn read(&mut self) -> Result<Option<SynthesizedResponse>> {

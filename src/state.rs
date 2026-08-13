@@ -119,10 +119,12 @@ impl BotState {
         }
     }
 
+    pub fn gender_override(&self, user_id: UserId) -> Option<bool> {
+        self.gender.get(&user_id).map(|value| *value)
+    }
+
     pub fn is_female(&self, user_id: UserId) -> bool {
-        self.gender
-            .get(&user_id)
-            .map(|value| *value)
+        self.gender_override(user_id)
             .unwrap_or_else(|| self.default_female.load(Ordering::SeqCst))
     }
 

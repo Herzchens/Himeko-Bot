@@ -11,7 +11,7 @@ pub async fn echo(
     ctx: Context<'_>,
     #[description = "Nội dung tin nhắn muốn Bot nói"] message: String,
 ) -> Result<(), Error> {
-    let config = ctx.data().config.read().await;
+    let config = ctx.data().config_snapshot().await;
     let level = UserLevel::of(ctx.author().id.get(), &config);
     drop(config);
 

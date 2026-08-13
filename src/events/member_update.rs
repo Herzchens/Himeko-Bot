@@ -15,7 +15,7 @@ pub async fn handle_member_update(
 
     let guild_id = event_data.guild_id;
     let rank_config = {
-        let config = data.config.read().await;
+        let config = data.config_snapshot().await;
         match config.rank.guild_config(guild_id.get()) {
             Some(config) => config,
             None => return,

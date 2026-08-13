@@ -208,10 +208,13 @@ impl TtsConfig {
                 lang = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("steps") {
-                steps = val.as_u64().map(|v| v as u8);
+                steps = val.as_u64().and_then(|v| u8::try_from(v).ok());
             }
             if let Some(val) = map.get("speed") {
-                speed = val.as_f64().map(|v| v as f32);
+                speed = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("autostart") {
                 autostart = val.as_bool().unwrap_or(true);
@@ -287,7 +290,10 @@ impl TtsConfig {
                 voice_male = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("speed") {
-                speed = val.as_f64().map(|v| v as f32);
+                speed = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("autostart") {
                 autostart = val.as_bool().unwrap_or(true);
@@ -296,13 +302,16 @@ impl TtsConfig {
                 mode = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("temperature") {
-                temperature = val.as_f64().map(|v| v as f32);
+                temperature = val
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= f32::MAX as f64)
+                    .map(|value| value as f32);
             }
             if let Some(val) = map.get("device") {
                 device = val.as_str().map(String::from);
             }
             if let Some(val) = map.get("pitch") {
-                pitch = val.as_i64().map(|v| v as i32);
+                pitch = val.as_i64().and_then(|v| i32::try_from(v).ok());
             }
         }
 
@@ -317,6 +326,138 @@ impl TtsConfig {
             device,
             pitch,
         })
+    }
+}
+
+fn require_config_string(
+    section: &str,
+    key: &str,
+    value: &serde_yaml::Value,
+) -> anyhow::Result<()> {
+    if value.as_str().is_none() {
+        anyhow::bail!("{section}.{key} must be a string");
+    }
+    Ok(())
+}
+
+fn require_config_bool(section: &str, key: &str, value: &serde_yaml::Value) -> anyhow::Result<()> {
+    if value.as_bool().is_none() {
+        anyhow::bail!("{section}.{key} must be a boolean");
+    }
+    Ok(())
+}
+
+fn require_config_f32(section: &str, key: &str, value: &serde_yaml::Value) -> anyhow::Result<()> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| anyhow::anyhow!("{section}.{key} must be a number"))?;
+    if !number.is_finite() || number.abs() > f32::MAX as f64 {
+        anyhow::bail!("{section}.{key} must be a finite f32-compatible number");
+    }
+    Ok(())
+}
+
+struct ActiveProviderOptions<'a> {
+    section: &'static str,
+    list: Option<&'a [HashMap<String, serde_yaml::Value>]>,
+    allowed: &'static [&'static str],
+}
+
+impl TtsConfig {
+    fn validate_active_provider_options(&self) -> anyhow::Result<()> {
+        let active = match self.provider.as_str() {
+            "supertonic" => ActiveProviderOptions {
+                section: "tts.supertonic",
+                list: self.supertonic.as_deref(),
+                allowed: &[
+                    "server_url",
+                    "female",
+                    "male",
+                    "lang",
+                    "steps",
+                    "speed",
+                    "autostart",
+                ],
+            },
+            "openai" => ActiveProviderOptions {
+                section: "tts.openai",
+                list: self.openai.as_deref(),
+                allowed: &["api_url", "api_key", "female", "male", "model"],
+            },
+            "vieneu" => ActiveProviderOptions {
+                section: "tts.vieneu",
+                list: self.vieneu.as_deref(),
+                allowed: &[
+                    "server_url",
+                    "female",
+                    "male",
+                    "speed",
+                    "autostart",
+                    "mode",
+                    "temperature",
+                    "device",
+                    "pitch",
+                ],
+            },
+            _ => return Ok(()),
+        };
+
+        let Some(list) = active.list else {
+            return Ok(());
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        for map in list {
+            for (key, value) in map {
+                if !active.allowed.contains(&key.as_str()) {
+                    anyhow::bail!("unknown {} option: {key}", active.section);
+                }
+                if !seen.insert(key.as_str()) {
+                    anyhow::bail!("duplicate {} option: {key}", active.section);
+                }
+
+                match (self.provider.as_str(), key.as_str()) {
+                    ("supertonic", "server_url" | "female" | "male" | "lang")
+                    | ("openai", "api_url" | "api_key" | "female" | "male" | "model")
+                    | ("vieneu", "server_url" | "female" | "male" | "mode" | "device") => {
+                        require_config_string(active.section, key, value)?;
+                    }
+                    ("supertonic" | "vieneu", "autostart") => {
+                        require_config_bool(active.section, key, value)?;
+                    }
+                    ("supertonic", "steps") => {
+                        let raw = value.as_u64().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{}.steps must be a non-negative integer",
+                                active.section
+                            )
+                        })?;
+                        u8::try_from(raw).map_err(|_| {
+                            anyhow::anyhow!(
+                                "{}.steps must fit in an unsigned 8-bit integer",
+                                active.section
+                            )
+                        })?;
+                    }
+                    ("supertonic", "speed") | ("vieneu", "speed" | "temperature") => {
+                        require_config_f32(active.section, key, value)?;
+                    }
+                    ("vieneu", "pitch") => {
+                        let raw = value.as_i64().ok_or_else(|| {
+                            anyhow::anyhow!("{}.pitch must be an integer", active.section)
+                        })?;
+                        i32::try_from(raw).map_err(|_| {
+                            anyhow::anyhow!(
+                                "{}.pitch must fit in a signed 32-bit integer",
+                                active.section
+                            )
+                        })?;
+                    }
+                    _ => unreachable!("allowed option must have a validation branch"),
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -377,6 +518,27 @@ impl Config {
         Ok(config)
     }
 
+    pub fn validate_hot_reload_from(&self, current: &Self) -> anyhow::Result<()> {
+        if self.bot.token != current.bot.token {
+            anyhow::bail!("bot.token is startup-only");
+        }
+        if self.bot.application_id != current.bot.application_id {
+            anyhow::bail!("bot.application_id is startup-only");
+        }
+        if self.console_chat != current.console_chat {
+            anyhow::bail!("console_chat is startup-only");
+        }
+        if self.logging.webhook_url != current.logging.webhook_url {
+            anyhow::bail!("logging.webhook_url is startup-only");
+        }
+        if self.rank != current.rank {
+            anyhow::bail!(
+                "rank configuration is startup-only because reconciliation and the monthly scheduler are created at startup"
+            );
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
         if self.bot.token.is_empty() || self.bot.token == "YOUR_DISCORD_BOT_TOKEN" {
             anyhow::bail!("bot.token must be set to a valid Discord bot token");
@@ -399,6 +561,7 @@ impl Config {
         if self.tts.provider == "gtts" && (self.tts.rate != 0 || self.tts.pitch != 0) {
             anyhow::bail!("gTTS does not support tts.rate or tts.pitch; both must be 0");
         }
+        self.tts.validate_active_provider_options()?;
         match self.tts.provider.as_str() {
             "supertonic" if self.tts.get_supertonic_config().is_none() => {
                 anyhow::bail!("tts.supertonic must be configured when provider is 'supertonic'");
@@ -430,7 +593,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RankConfig {
     #[serde(default)]
@@ -449,7 +612,7 @@ pub struct RankConfig {
     pub guilds: HashMap<String, GuildRankConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GuildRankConfig {
     #[serde(default = "default_true")]
@@ -646,7 +809,7 @@ impl RankConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 pub struct VoiceStatusConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -664,7 +827,7 @@ fn default_voice_status_interval() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 pub struct ConsoleChatConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -698,6 +861,53 @@ tts:
 "#,
         )
         .expect("test config must parse")
+    }
+
+    #[test]
+    fn hot_reload_rejects_startup_owned_sections() {
+        let current = valid_config();
+
+        let mut changed = valid_config();
+        changed.bot.token = "different-token".to_string();
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.bot.application_id = 2;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.console_chat.enabled = true;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.console_chat.default_channel_id = 99;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.logging.webhook_url = "https://example.invalid/webhook".to_string();
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+
+        let mut changed = valid_config();
+        changed.rank.enabled = true;
+        assert!(changed.validate_hot_reload_from(&current).is_err());
+    }
+
+    #[test]
+    fn hot_reload_allows_runtime_owned_sections() {
+        let current = valid_config();
+        let mut changed = valid_config();
+        changed.tts.max_chars = 123;
+        changed.tts.default_gender = "male".to_string();
+        changed.abbreviations.insert("x".into(), "runtime".into());
+        changed.ai.enabled = true;
+        changed.ai.api_key = "test".into();
+        changed.permissions.allowed_users.push(42);
+        changed.voice_status.enabled = true;
+        changed.voice_status.channel_id = 10;
+        changed.voice_status.interval_secs = 30;
+        changed.voice_status.steps = vec!["ready".into()];
+        changed.logging.control_channel_id = 99;
+        assert!(changed.validate_hot_reload_from(&current).is_ok());
     }
 
     #[test]
@@ -929,6 +1139,69 @@ tts:
         config
             .validate()
             .expect("config.example.yml must satisfy runtime validation after required placeholders are replaced");
+    }
+
+    fn provider_config(provider: &str, section: &str) -> Config {
+        serde_yaml::from_str(&format!(
+            r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: {provider}
+  msedge: []
+  {provider}:
+{section}
+"#
+        ))
+        .expect("provider test config must parse as generic YAML")
+    }
+
+    #[test]
+    fn rejects_supertonic_steps_that_do_not_fit_u8() {
+        let config = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - steps: 256\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_supertonic_config().unwrap().steps, None);
+    }
+
+    #[test]
+    fn rejects_vieneu_pitch_that_does_not_fit_i32() {
+        let config = provider_config(
+            "vieneu",
+            "    - server_url: http://127.0.0.1:7799\n    - female: Ly\n    - male: Binh\n    - pitch: 4294967296\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_vieneu_config().unwrap().pitch, None);
+    }
+
+    #[test]
+    fn rejects_nonrepresentable_provider_float() {
+        let config = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - speed: 1.0e100\n    - autostart: false",
+        );
+        assert!(config.validate().is_err());
+        assert_eq!(config.tts.get_supertonic_config().unwrap().speed, None);
+    }
+
+    #[test]
+    fn rejects_wrong_typed_and_unknown_active_provider_options() {
+        let wrong_type = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - autostart: \"false\"",
+        );
+        assert!(wrong_type.validate().is_err());
+
+        let typo = provider_config(
+            "supertonic",
+            "    - server_url: http://127.0.0.1:7788\n    - female: F2\n    - male: M1\n    - autostrat: false",
+        );
+        assert!(typo.validate().is_err());
     }
 
     #[test]

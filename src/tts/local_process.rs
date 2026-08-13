@@ -67,12 +67,12 @@ pub fn existing(key: &str, signature: &str) -> anyhow::Result<Option<Arc<Managed
     let Some(process) = candidate else {
         return Ok(None);
     };
-    if process.signature != signature {
-        anyhow::bail!(
-            "managed process '{key}' is already running with a different launch configuration"
-        );
-    }
     if process.is_alive() {
+        if process.signature != signature {
+            anyhow::bail!(
+                "managed process '{key}' is already running with a different launch configuration"
+            );
+        }
         return Ok(Some(process));
     }
 
@@ -105,12 +105,12 @@ where
     prune_dead_entries(&mut entries);
 
     if let Some(process) = entries.get(&key).and_then(Weak::upgrade) {
-        if process.signature != signature {
-            anyhow::bail!(
-                "managed process '{key}' is already running with a different launch configuration"
-            );
-        }
         if process.is_alive() {
+            if process.signature != signature {
+                anyhow::bail!(
+                    "managed process '{key}' is already running with a different launch configuration"
+                );
+            }
             return Ok(process);
         }
         entries.remove(&key);
@@ -126,11 +126,11 @@ where
     Ok(process)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn unique_key(label: &str) -> String {
         let nonce = SystemTime::now()
@@ -140,7 +140,23 @@ mod tests {
         format!("{label}-{nonce}")
     }
 
-    #[cfg(unix)]
+    fn short_lived_process(key: String) -> Arc<ManagedProcess> {
+        let process = spawn_managed(key, "mode=cpu", || {
+            Command::new("sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+                .map_err(Into::into)
+        })
+        .expect("short-lived process must start");
+        for _ in 0..100 {
+            if !process.is_alive() {
+                return process;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("short-lived process did not exit in time");
+    }
+
     #[test]
     fn shared_lease_keeps_child_alive_until_last_owner_drops() {
         let key = unique_key("lease");
@@ -171,7 +187,6 @@ mod tests {
         assert!(!status.success(), "last lease must stop and reap the child");
     }
 
-    #[cfg(unix)]
     #[test]
     fn conflicting_launch_configuration_is_rejected() {
         let key = unique_key("signature");
@@ -186,5 +201,31 @@ mod tests {
         let error = existing(&key, "mode=gpu").expect_err("conflicting config must fail");
         assert!(error.to_string().contains("different launch configuration"));
         drop(process);
+    }
+
+    #[test]
+    fn dead_process_does_not_conflict_with_new_signature_lookup() {
+        let key = unique_key("dead-existing");
+        let dead = short_lived_process(key.clone());
+        assert!(existing(&key, "mode=gpu")
+            .expect("dead process must not create a signature conflict")
+            .is_none());
+        drop(dead);
+    }
+
+    #[test]
+    fn dead_process_can_be_replaced_with_new_signature() {
+        let key = unique_key("dead-spawn");
+        let dead = short_lived_process(key.clone());
+        let replacement = spawn_managed(key, "mode=gpu", || {
+            Command::new("sh")
+                .args(["-c", "sleep 30"])
+                .spawn()
+                .map_err(Into::into)
+        })
+        .expect("dead process must not block a replacement signature");
+        assert!(replacement.is_alive());
+        drop(dead);
+        drop(replacement);
     }
 }

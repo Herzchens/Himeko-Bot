@@ -13,14 +13,14 @@ You can use it to synthesize text to speech with many voices MS provided.
 | `proxy` | SOCKS4/5 and HTTP CONNECT proxy support. Pairs with any runtime feature. |
 
 # How to use
-1. You need get a `SpeechConfig` to configure the voice of text to speech.  
-You can convert `Voice` to `SpeechConfig` simply. Use `get_voices_list` function to get all available voices.  
-`Voice` and `SpeechConfig` implemented `serde::Serialize` and `serde::Deserialize`.  
+1. You need get a `SpeechConfig` to configure the voice of text to speech.
+You can convert `Voice` to `SpeechConfig` simply. Use `get_voices_list` function to get all available voices.
+`Voice` and `SpeechConfig` implemented `serde::Serialize` and `serde::Deserialize`.
 For example:
     ```rust
     use msedge_tts::voice::get_voices_list;
     use msedge_tts::tts::SpeechConfig;
-    
+
     fn main() {
         let voices = get_voices_list().unwrap();
         let speechConfig = SpeechConfig::from(&voices[0]);
@@ -36,7 +36,7 @@ For example:
     you can get `audio_bytes` and `audio_metadata`.
     ```rust
     use msedge_tts::{tts::client::connect, tts::SpeechConfig, voice::get_voices_list};
-    
+
     fn main() {
         let voices = get_voices_list().unwrap();
         for voice in &voices {
@@ -52,9 +52,9 @@ For example:
     }
     ```
     ### Sync Stream
-    Call Sender Stream function `Sender::send` to synthesize text to speech. Call Reader Stream function `Receiver::read` to get data.  
+    Call Sender Stream function `Sender::send` to synthesize text to speech. Call Reader Stream function `Receiver::read` to get data.
     `read` return `Option<SynthesizedResponse>`, the response may be `AudioBytes`
-    or `AudioMetadata` or None. This is because the **MSEdge Read aloud** API returns multiple data segment and metadata and other information sequentially.  
+    or `AudioMetadata` or None. This is because the **MSEdge Read aloud** API returns multiple data segment and metadata and other information sequentially.
 
     **Caution**: One `send` corresponds to multiple `read`. Next `send` call will block until there no data to read.
     `read` will block before you call a `send`.
@@ -71,14 +71,14 @@ For example:
         },
         thread::spawn,
     };
-    
+
     fn main() {
         let voices = get_voices_list().unwrap();
         for voice in &voices {
             if voice.name.contains("YunyangNeural") {
                 let config = SpeechConfig::from(voice);
                 let (mut sender, mut reader) = msedge_tts_split().unwrap();
-    
+
                 let signal = Arc::new(AtomicBool::new(false));
                 let end = signal.clone();
                 spawn(move || {
@@ -92,7 +92,7 @@ For example:
                     println!("synthesizing...4");
                     end.store(true, Ordering::Relaxed);
                 });
-    
+
                 loop {
                     if signal.load(Ordering::Relaxed) && !reader.can_read() {
                         break;

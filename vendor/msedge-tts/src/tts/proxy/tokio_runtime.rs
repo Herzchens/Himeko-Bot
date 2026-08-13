@@ -366,12 +366,12 @@ async fn websocket_connect_proxy_async(
 ///
 /// The proxy protocol is specified by the URI scheme.
 ///
-/// * `http`: Proxy. Default when no scheme is specified.  
-/// * `https`: HTTPS Proxy.  
-/// * `socks4`: SOCKS4 Proxy.  
-/// * `socks4a`: SOCKS4a Proxy. Proxy resolves URL hostname.  
-/// * `socks5`: SOCKS5 Proxy.  
-/// * `socks` | `socks5h`: SOCKS5 Proxy. Proxy resolves URL hostname.  
+/// * `http`: Proxy. Default when no scheme is specified.
+/// * `https`: HTTPS Proxy.
+/// * `socks4`: SOCKS4 Proxy.
+/// * `socks4a`: SOCKS4a Proxy. Proxy resolves URL hostname.
+/// * `socks5`: SOCKS5 Proxy.
+/// * `socks` | `socks5h`: SOCKS5 Proxy. Proxy resolves URL hostname.
 #[cfg_attr(docsrs, doc(cfg(all(feature = "proxy", feature = "tokio-runtime"))))]
 pub async fn connect_proxy_async(
     proxy: &str,
@@ -389,12 +389,12 @@ pub async fn connect_proxy_async(
 ///
 /// The proxy protocol is specified by the URI scheme.
 ///
-/// * `http`: Proxy. Default when no scheme is specified.  
-/// * `https`: HTTPS Proxy.  
-/// * `socks4`: SOCKS4 Proxy.  
-/// * `socks4a`: SOCKS4a Proxy. Proxy resolves URL hostname.  
-/// * `socks5`: SOCKS5 Proxy.  
-/// * `socks` | `socks5h`: SOCKS5 Proxy. Proxy resolves URL hostname.  
+/// * `http`: Proxy. Default when no scheme is specified.
+/// * `https`: HTTPS Proxy.
+/// * `socks4`: SOCKS4 Proxy.
+/// * `socks4a`: SOCKS4a Proxy. Proxy resolves URL hostname.
+/// * `socks5`: SOCKS5 Proxy.
+/// * `socks` | `socks5h`: SOCKS5 Proxy. Proxy resolves URL hostname.
 #[cfg_attr(docsrs, doc(cfg(all(feature = "proxy", feature = "tokio-runtime"))))]
 pub async fn msedge_tts_split_proxy_async(
     proxy: &str,

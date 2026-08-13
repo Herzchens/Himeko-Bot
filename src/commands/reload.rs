@@ -7,7 +7,7 @@ use crate::tts::openai::OpenAiEngine;
 use crate::tts::supertonic::SupertonicEngine;
 use crate::tts::vieneu::VieneuEngine;
 use crate::tts::TtsEngine;
-use crate::Data;
+use crate::{Data, RuntimeSnapshot};
 use poise::CreateReply;
 use std::sync::Arc;
 
@@ -59,16 +59,21 @@ async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
     }
 }
 
-fn rank_reload_requires_restart(rank_enabled: bool, legacy_pending: bool) -> bool {
-    rank_enabled && legacy_pending
+fn legacy_rank_enable_requires_restart(
+    current_rank_enabled: bool,
+    new_rank_enabled: bool,
+    legacy_pending: bool,
+) -> bool {
+    !current_rank_enabled && new_rank_enabled && legacy_pending
 }
 
-/// Tải lại file config và cập nhật bot
+/// Tải lại các cấu hình runtime-safe bằng một immutable snapshot duy nhất.
 #[poise::command(slash_command, guild_only)]
 pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let config = ctx.data().config.read().await.clone();
-    let level = UserLevel::of(ctx.author().id.get(), &config);
+    let current_runtime = ctx.data().runtime_snapshot().await;
+    let current_config = Arc::clone(&current_runtime.config);
+    let level = UserLevel::of(ctx.author().id.get(), &current_config);
 
     if !level.can_preempt() {
         ctx.send(
@@ -80,70 +85,94 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    match Config::load("config.yml") {
-        Ok(new_config)
-            if rank_reload_requires_restart(
-                new_config.rank.enabled,
-                ctx.data().rank_store.legacy_migration_pending(),
-            ) =>
-        {
+    let new_config = match Config::load("config.yml") {
+        Ok(config) => config,
+        Err(error) => {
             ctx.send(
                 CreateReply::default()
-                    .content(
-                        "❌ Không thể bật Rank bằng /reload khi database.yml legacy đang chờ migrate. Hãy khởi động lại bot với cấu hình Rank đã bật để migration chạy an toàn.",
-                    )
+                    .content(format!("❌ Lỗi khi đọc config: {error}"))
                     .ephemeral(true),
             )
             .await?;
+            return Ok(());
         }
-        Ok(new_config) => match create_engine(&new_config).await {
-            Ok(tts_engine) => {
-                let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));
-                let default_female = new_config.tts.default_gender == "female";
-                *ctx.data().config.write().await = Arc::new(new_config);
-                *ctx.data().normalizer.write().await = normalizer;
-                *ctx.data().tts_engine.write().await = tts_engine;
-                ctx.data().state.set_default_female(default_female);
+    };
 
-                tracing::info!("Config reloaded by {}", ctx.author().name);
-                ctx.send(
-                    CreateReply::default()
-                        .content("✅ Đã tải lại config.yml và cập nhật cấu hình thành công!")
-                        .ephemeral(true),
+    if legacy_rank_enable_requires_restart(
+        current_config.rank.enabled,
+        new_config.rank.enabled,
+        ctx.data().rank_store.legacy_migration_pending(),
+    ) {
+        ctx.send(
+            CreateReply::default()
+                .content(
+                    "❌ Không thể bật Rank bằng /reload khi database.yml legacy đang chờ migrate. Hãy khởi động lại bot với cấu hình Rank đã bật để migration chạy an toàn.",
                 )
-                .await?;
-            }
-            Err(err_msg) => {
-                ctx.send(
-                    CreateReply::default()
-                        .content(format!("❌ {err_msg}"))
-                        .ephemeral(true),
-                )
-                .await?;
-            }
-        },
-        Err(e) => {
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if let Err(error) = new_config.validate_hot_reload_from(&current_config) {
+        ctx.send(
+            CreateReply::default()
+                .content(format!(
+                    "❌ Không thể hot-reload thay đổi này: {error}. Hãy restart bot để áp dụng."
+                ))
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    // Build every fallible replacement before publishing any new runtime state.
+    let tts_engine = match create_engine(&new_config).await {
+        Ok(engine) => engine,
+        Err(error) => {
             ctx.send(
                 CreateReply::default()
-                    .content(format!("❌ Lỗi khi đọc config: {e}"))
+                    .content(format!("❌ {error}"))
                     .ephemeral(true),
             )
             .await?;
+            return Ok(());
         }
-    }
+    };
+    let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));
+    let default_female = new_config.tts.default_gender == "female";
+    let new_runtime = Arc::new(RuntimeSnapshot {
+        config: Arc::new(new_config),
+        normalizer,
+        tts_engine,
+        default_female,
+    });
+
+    // A single pointer publication makes config, normalizer, engine and default gender one generation.
+    ctx.data().publish_runtime(Arc::clone(&new_runtime)).await;
+    // Keep the legacy BotState default synchronized for non-TTS callers; the TTS path uses the snapshot.
+    ctx.data().state.set_default_female(default_female);
+
+    tracing::info!("Config hot-reloaded by {}", ctx.author().name);
+    ctx.send(
+        CreateReply::default()
+            .content("✅ Đã hot-reload các cấu hình runtime an toàn.")
+            .ephemeral(true),
+    )
+    .await?;
 
     Ok(())
 }
 
 #[cfg(test)]
-mod rank_reload_tests {
-    use super::rank_reload_requires_restart;
+mod reload_tests {
+    use super::legacy_rank_enable_requires_restart;
 
     #[test]
-    fn legacy_pending_only_requires_restart_when_reload_enables_rank() {
-        assert!(rank_reload_requires_restart(true, true));
-        assert!(!rank_reload_requires_restart(false, true));
-        assert!(!rank_reload_requires_restart(true, false));
-        assert!(!rank_reload_requires_restart(false, false));
+    fn legacy_pending_only_special_cases_disabled_to_enabled_rank_transition() {
+        assert!(legacy_rank_enable_requires_restart(false, true, true));
+        assert!(!legacy_rank_enable_requires_restart(true, true, true));
+        assert!(!legacy_rank_enable_requires_restart(false, false, true));
+        assert!(!legacy_rank_enable_requires_restart(false, true, false));
     }
 }

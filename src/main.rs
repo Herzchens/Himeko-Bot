@@ -25,14 +25,66 @@ use tts::TtsEngine;
 use serenity::prelude::GatewayIntents;
 use songbird::SerenityInit;
 
+pub struct RuntimeSnapshot {
+    pub config: Arc<Config>,
+    pub normalizer: Arc<Normalizer>,
+    pub tts_engine: Arc<dyn TtsEngine>,
+    pub default_female: bool,
+}
+
+pub struct RuntimeState {
+    current: RwLock<Arc<RuntimeSnapshot>>,
+    updates: tokio::sync::watch::Sender<u64>,
+}
+
+impl RuntimeState {
+    pub fn new(initial: Arc<RuntimeSnapshot>) -> Self {
+        let (updates, _initial_receiver) = tokio::sync::watch::channel(0);
+        Self {
+            current: RwLock::new(initial),
+            updates,
+        }
+    }
+
+    pub async fn snapshot(&self) -> Arc<RuntimeSnapshot> {
+        let current = self.current.read().await;
+        Arc::clone(&*current)
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.updates.subscribe()
+    }
+
+    pub async fn publish(&self, next: Arc<RuntimeSnapshot>) {
+        {
+            let mut current = self.current.write().await;
+            *current = next;
+        }
+        self.updates
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+}
+
 pub struct Data {
-    pub config: Arc<RwLock<Arc<Config>>>,
+    pub runtime: Arc<RuntimeState>,
     pub state: BotState,
-    pub normalizer: RwLock<Arc<Normalizer>>,
-    pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
     pub tts_scheduler: Arc<tts::scheduler::TtsScheduler>,
     pub language_detector: lingua::LanguageDetector,
     pub rank_store: Arc<rank::db::RankStore>,
+}
+
+impl Data {
+    pub async fn runtime_snapshot(&self) -> Arc<RuntimeSnapshot> {
+        self.runtime.snapshot().await
+    }
+
+    pub async fn config_snapshot(&self) -> Arc<Config> {
+        Arc::clone(&self.runtime.snapshot().await.config)
+    }
+
+    pub async fn publish_runtime(&self, next: Arc<RuntimeSnapshot>) {
+        self.runtime.publish(next).await;
+    }
 }
 
 #[tokio::main]
@@ -124,6 +176,13 @@ async fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("unsupported tts provider after validation: {other}"),
     };
 
+    let initial_runtime = Arc::new(RuntimeSnapshot {
+        config: Arc::clone(&config),
+        normalizer,
+        tts_engine,
+        default_female,
+    });
+    let runtime_clone = Arc::clone(&initial_runtime);
     let config_clone = Arc::clone(&config);
     let rank_store_setup = Arc::clone(&rank_store);
     let framework = poise::Framework::builder()
@@ -171,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                let config_rwlock = Arc::new(RwLock::new(config_clone.clone()));
+                let runtime_state = Arc::new(RuntimeState::new(Arc::clone(&runtime_clone)));
 
                 if config_clone.console_chat.enabled {
                     let http_console = Arc::clone(&ctx.http);
@@ -247,127 +306,18 @@ async fn main() -> anyhow::Result<()> {
                     });
                 }
 
-                let config_for_task = config_rwlock.clone();
+                let runtime_for_task = Arc::clone(&runtime_state);
                 let http_for_task = Arc::clone(&ctx.http);
                 let cache_for_task = Arc::clone(&ctx.cache);
-
-                tokio::spawn(async move {
-                    let mut current_index = 0;
-                    let mut was_empty = None;
-                    loop {
-                        let config = config_for_task.read().await.clone();
-
-                        if !config.voice_status.enabled {
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                            continue;
-                        }
-
-                        let steps = &config.voice_status.steps;
-                        let interval = std::time::Duration::from_secs(config.voice_status.interval_secs.max(10));
-
-                        if config.voice_status.channel_id == 0 || steps.is_empty() {
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                            continue;
-                        }
-                        let channel_id = serenity::all::ChannelId::new(config.voice_status.channel_id);
-
-                        // Check member count in target voice channel (excluding bots)
-                        let mut member_count = 0;
-                        let mut target_guild = None;
-                        for guild_id in cache_for_task.guilds() {
-                            if let Some(guild) = cache_for_task.guild(guild_id) {
-                                if guild.channels.contains_key(&channel_id) {
-                                    target_guild = Some(guild.clone());
-                                    break;
-                                }
-                            }
-                        }
-
-                        if let Some(guild) = target_guild {
-                            member_count = guild.voice_states.iter()
-                                .filter(|(user_id, vs)| {
-                                    if vs.channel_id != Some(channel_id) {
-                                        return false;
-                                    }
-                                    if let Some(user) = cache_for_task.user(*user_id) {
-                                        !user.bot
-                                    } else {
-                                        true
-                                    }
-                                })
-                                .count();
-                        }
-
-                        if member_count == 0 {
-                            if was_empty != Some(true) {
-                                tracing::info!(channel_id = channel_id.get(), "Voice channel is empty. Clearing status.");
-                                let map = serde_json::json!({
-                                    "status": ""
-                                });
-                                match http_for_task.edit_voice_status(channel_id, &map, None).await {
-                                    Ok(_) => was_empty = Some(true),
-                                    Err(error) => tracing::warn!(
-                                        %error,
-                                        channel_id = channel_id.get(),
-                                        "Failed to clear voice channel status; will retry"
-                                    ),
-                                }
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                            continue;
-                        }
-
-                        was_empty = Some(false);
-
-                        let status_text = if config.voice_status.random {
-                            use rand::seq::IndexedRandom;
-                            use rand::rng;
-                            steps.choose(&mut rng()).unwrap_or(&steps[0])
-                        } else {
-                            if current_index >= steps.len() {
-                                current_index = 0;
-                            }
-                            let text = &steps[current_index];
-                            current_index = (current_index + 1) % steps.len();
-                            text
-                        };
-
-                        tracing::debug!(
-                            channel_id = channel_id.get(),
-                            status = %status_text,
-                            "Updating voice channel status"
-                        );
-
-                        let map = serde_json::json!({
-                            "status": status_text
-                        });
-
-                        match http_for_task.edit_voice_status(channel_id, &map, None).await {
-                            Ok(_) => {
-                                tracing::info!(
-                                    channel_id = channel_id.get(),
-                                    status = %status_text,
-                                    "Successfully updated voice channel status"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    channel_id = channel_id.get(),
-                                    error = %e,
-                                    "Failed to update voice channel status"
-                                );
-                            }
-                        }
-
-                        tokio::time::sleep(interval).await;
-                    }
-                });
+                tokio::spawn(run_voice_status_task(
+                    runtime_for_task,
+                    http_for_task,
+                    cache_for_task,
+                ));
 
                 let data = Data {
-                    config: config_rwlock,
+                    runtime: Arc::clone(&runtime_state),
                     state,
-                    normalizer: RwLock::new(normalizer),
-                    tts_engine: RwLock::new(tts_engine),
                     tts_scheduler: Arc::new(tts::scheduler::TtsScheduler::default()),
                     language_detector: lingua::LanguageDetectorBuilder::from_languages(&[lingua::Language::Vietnamese, lingua::Language::English]).build(),
                     rank_store: Arc::clone(&rank_store_setup),
@@ -479,6 +429,206 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Default)]
+struct VoiceStatusLoopState {
+    applied: Option<config::VoiceStatusConfig>,
+    pending_clear: Option<u64>,
+    current_index: usize,
+    was_empty: Option<bool>,
+}
+
+impl VoiceStatusLoopState {
+    fn transition(&mut self, desired: &config::VoiceStatusConfig) -> Option<u64> {
+        if let Some(channel_id) = self.pending_clear {
+            return Some(channel_id);
+        }
+        if self.applied.as_ref() == Some(desired) {
+            return None;
+        }
+
+        if let Some(previous) = self.applied.as_ref() {
+            let needs_clear = previous.enabled
+                && previous.channel_id != 0
+                && (!desired.enabled || previous.channel_id != desired.channel_id);
+            if needs_clear {
+                self.pending_clear = Some(previous.channel_id);
+                return self.pending_clear;
+            }
+        }
+
+        self.applied = Some(desired.clone());
+        self.current_index = 0;
+        self.was_empty = None;
+        None
+    }
+
+    fn clear_succeeded(&mut self, channel_id: u64) {
+        if self.pending_clear == Some(channel_id) {
+            self.pending_clear = None;
+            self.applied = None;
+            self.current_index = 0;
+            self.was_empty = None;
+        }
+    }
+}
+
+async fn wait_for_runtime_update_or_timeout(
+    updates: &mut tokio::sync::watch::Receiver<u64>,
+    duration: std::time::Duration,
+) {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => {}
+        changed = updates.changed() => {
+            if changed.is_err() {
+                tokio::time::sleep(duration).await;
+            }
+        }
+    }
+}
+
+async fn run_voice_status_task(
+    runtime: Arc<RuntimeState>,
+    http: Arc<serenity::all::Http>,
+    cache: Arc<serenity::all::Cache>,
+) {
+    let mut loop_state = VoiceStatusLoopState::default();
+    let mut runtime_updates = runtime.subscribe();
+
+    loop {
+        let desired = runtime.snapshot().await.config.voice_status.clone();
+
+        if let Some(stale_channel_id) = loop_state.transition(&desired) {
+            let channel_id = serenity::all::ChannelId::new(stale_channel_id);
+            let map = serde_json::json!({ "status": "" });
+            match http.edit_voice_status(channel_id, &map, None).await {
+                Ok(_) => {
+                    tracing::info!(
+                        channel_id = stale_channel_id,
+                        "cleared stale voice status before applying reloaded voice-status config"
+                    );
+                    loop_state.clear_succeeded(stale_channel_id);
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel_id = stale_channel_id,
+                        "failed to clear stale voice status; retaining one pending clear for retry"
+                    );
+                    wait_for_runtime_update_or_timeout(
+                        &mut runtime_updates,
+                        std::time::Duration::from_secs(15),
+                    )
+                    .await;
+                    continue;
+                }
+            }
+        }
+
+        if !desired.enabled {
+            wait_for_runtime_update_or_timeout(
+                &mut runtime_updates,
+                std::time::Duration::from_secs(15),
+            )
+            .await;
+            continue;
+        }
+
+        let steps = &desired.steps;
+        let interval = std::time::Duration::from_secs(desired.interval_secs.max(10));
+        if desired.channel_id == 0 || steps.is_empty() {
+            wait_for_runtime_update_or_timeout(
+                &mut runtime_updates,
+                std::time::Duration::from_secs(15),
+            )
+            .await;
+            continue;
+        }
+        let channel_id = serenity::all::ChannelId::new(desired.channel_id);
+
+        let mut member_count = 0;
+        let mut target_guild = None;
+        for guild_id in cache.guilds() {
+            if let Some(guild) = cache.guild(guild_id) {
+                if guild.channels.contains_key(&channel_id) {
+                    target_guild = Some(guild.clone());
+                    break;
+                }
+            }
+        }
+
+        if let Some(guild) = target_guild {
+            member_count = guild
+                .voice_states
+                .iter()
+                .filter(|(user_id, voice_state)| {
+                    if voice_state.channel_id != Some(channel_id) {
+                        return false;
+                    }
+                    cache.user(*user_id).is_none_or(|user| !user.bot)
+                })
+                .count();
+        }
+
+        if member_count == 0 {
+            if loop_state.was_empty != Some(true) {
+                let map = serde_json::json!({ "status": "" });
+                match http.edit_voice_status(channel_id, &map, None).await {
+                    Ok(_) => loop_state.was_empty = Some(true),
+                    Err(error) => tracing::warn!(
+                        %error,
+                        channel_id = channel_id.get(),
+                        "failed to clear voice channel status; will retry"
+                    ),
+                }
+            }
+            wait_for_runtime_update_or_timeout(
+                &mut runtime_updates,
+                std::time::Duration::from_secs(15),
+            )
+            .await;
+            continue;
+        }
+
+        loop_state.was_empty = Some(false);
+        let status_text = if desired.random {
+            use rand::seq::IndexedRandom;
+            let Some(status) = steps.choose(&mut rand::rng()) else {
+                wait_for_runtime_update_or_timeout(
+                    &mut runtime_updates,
+                    std::time::Duration::from_secs(15),
+                )
+                .await;
+                continue;
+            };
+            status
+        } else {
+            if loop_state.current_index >= steps.len() {
+                loop_state.current_index = 0;
+            }
+            let text = &steps[loop_state.current_index];
+            loop_state.current_index = (loop_state.current_index + 1) % steps.len();
+            text
+        };
+
+        let map = serde_json::json!({ "status": status_text });
+        match http.edit_voice_status(channel_id, &map, None).await {
+            Ok(_) => tracing::info!(
+                channel_id = channel_id.get(),
+                status = %status_text,
+                "successfully updated voice channel status"
+            ),
+            Err(error) => tracing::error!(
+                channel_id = channel_id.get(),
+                %error,
+                "failed to update voice channel status"
+            ),
+        }
+
+        wait_for_runtime_update_or_timeout(&mut runtime_updates, interval).await;
+    }
+}
+
 fn monthly_channel_belongs_to_guild(
     channel: &serenity::all::Channel,
     expected_guild_id: u64,
@@ -577,5 +727,182 @@ mod monthly_channel_boundary_tests {
         let channel = guild_channel(10);
         assert!(monthly_channel_belongs_to_guild(&channel, 10));
         assert!(!monthly_channel_belongs_to_guild(&channel, 20));
+    }
+}
+
+#[cfg(test)]
+mod runtime_snapshot_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct MarkerEngine(u8);
+
+    #[async_trait::async_trait]
+    impl TtsEngine for MarkerEngine {
+        async fn synthesize(&self, _text: &str, _voice: &str) -> anyhow::Result<Vec<u8>> {
+            Ok(vec![self.0])
+        }
+    }
+
+    fn snapshot(
+        max_chars: usize,
+        word: &str,
+        engine: u8,
+        default_female: bool,
+    ) -> Arc<RuntimeSnapshot> {
+        let mut config: Config = serde_yaml::from_str(
+            r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: msedge
+  msedge: []
+"#,
+        )
+        .expect("test config must parse");
+        config.tts.max_chars = max_chars;
+        let normalizer = Arc::new(Normalizer::from_config(&HashMap::from([(
+            "x".to_string(),
+            word.to_string(),
+        )])));
+        Arc::new(RuntimeSnapshot {
+            config: Arc::new(config),
+            normalizer,
+            tts_engine: Arc::new(MarkerEngine(engine)),
+            default_female,
+        })
+    }
+
+    async fn assert_generation_is_coherent(snapshot: Arc<RuntimeSnapshot>) {
+        let observed = (
+            snapshot.config.tts.max_chars,
+            snapshot.normalizer.expand("x"),
+            snapshot
+                .tts_engine
+                .synthesize("marker", "voice")
+                .await
+                .expect("marker engine must synthesize"),
+            snapshot.default_female,
+        );
+        assert!(
+            observed == (11, "old".to_string(), vec![1], true)
+                || observed == (22, "new".to_string(), vec![2], false),
+            "runtime reader observed a mixed generation: {observed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_publication_wakes_subscribers_even_before_they_poll() {
+        let old = snapshot(11, "old", 1, true);
+        let new = snapshot(22, "new", 2, false);
+        let state = Arc::new(RuntimeState::new(old));
+        let mut updates = state.subscribe();
+
+        state.publish(new).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), updates.changed())
+            .await
+            .expect("runtime update notification must not wait for the old timer")
+            .expect("RuntimeState sender must remain alive");
+        assert_eq!(state.snapshot().await.config.tts.max_chars, 22);
+    }
+
+    #[tokio::test]
+    async fn concurrent_runtime_readers_never_observe_mixed_generations() {
+        let old = snapshot(11, "old", 1, true);
+        let new = snapshot(22, "new", 2, false);
+        let state = Arc::new(RuntimeState::new(Arc::clone(&old)));
+
+        let writer_state = Arc::clone(&state);
+        let writer_old = Arc::clone(&old);
+        let writer_new = Arc::clone(&new);
+        let writer = tokio::spawn(async move {
+            for index in 0..500 {
+                let next = if index % 2 == 0 {
+                    Arc::clone(&writer_new)
+                } else {
+                    Arc::clone(&writer_old)
+                };
+                writer_state.publish(next).await;
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let mut readers = Vec::new();
+        for _ in 0..8 {
+            let reader_state = Arc::clone(&state);
+            readers.push(tokio::spawn(async move {
+                for _ in 0..250 {
+                    assert_generation_is_coherent(reader_state.snapshot().await).await;
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        writer.await.expect("writer task must complete");
+        for reader in readers {
+            reader.await.expect("reader task must complete");
+        }
+    }
+
+    #[test]
+    fn voice_status_transition_keeps_only_one_stale_clear_pending() {
+        let mut state = VoiceStatusLoopState::default();
+        let first = config::VoiceStatusConfig {
+            enabled: true,
+            channel_id: 10,
+            interval_secs: 30,
+            steps: vec!["one".into()],
+            random: false,
+        };
+        let second = config::VoiceStatusConfig {
+            channel_id: 20,
+            steps: vec!["two".into()],
+            ..first.clone()
+        };
+        let third = config::VoiceStatusConfig {
+            channel_id: 30,
+            steps: vec!["three".into()],
+            ..first.clone()
+        };
+
+        assert_eq!(state.transition(&first), None);
+        state.current_index = 7;
+        state.was_empty = Some(false);
+        assert_eq!(state.transition(&second), Some(10));
+        assert_eq!(state.transition(&third), Some(10));
+        state.clear_succeeded(10);
+        assert_eq!(state.transition(&third), None);
+        assert_eq!(
+            state.applied.as_ref().map(|value| value.channel_id),
+            Some(30)
+        );
+        assert_eq!(state.current_index, 0);
+        assert_eq!(state.was_empty, None);
+    }
+
+    #[test]
+    fn voice_status_same_channel_reload_resets_cursor_without_stale_clear() {
+        let mut state = VoiceStatusLoopState::default();
+        let first = config::VoiceStatusConfig {
+            enabled: true,
+            channel_id: 10,
+            interval_secs: 30,
+            steps: vec!["one".into(), "two".into()],
+            random: false,
+        };
+        let mut changed = first.clone();
+        changed.steps = vec!["new".into()];
+
+        assert_eq!(state.transition(&first), None);
+        state.current_index = 1;
+        state.was_empty = Some(false);
+        assert_eq!(state.transition(&changed), None);
+        assert_eq!(state.current_index, 0);
+        assert_eq!(state.was_empty, None);
+        assert_eq!(state.pending_clear, None);
     }
 }

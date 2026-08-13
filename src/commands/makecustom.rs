@@ -91,7 +91,7 @@ pub async fn makecustom(
 
     if players.len() == 1 {
         if let Some(only_player) = players.iter().next() {
-            let config = ctx.data().config.read().await;
+            let config = ctx.data().config_snapshot().await;
             let owner_id = config.permissions.owner_id;
 
             if only_player.get() == owner_id {

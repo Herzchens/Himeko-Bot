@@ -8,7 +8,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 /// Cho bot rời voice channel hiện tại
 #[poise::command(slash_command, guild_only)]
 pub async fn leave(ctx: Context<'_>) -> Result<(), Error> {
-    let config = ctx.data().config.read().await.clone();
+    let config = ctx.data().config_snapshot().await;
     let level = UserLevel::of(ctx.author().id.get(), &config);
     if !level.can_join() {
         ctx.send(

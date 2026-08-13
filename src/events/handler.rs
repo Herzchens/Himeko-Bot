@@ -2,6 +2,7 @@ use crate::permissions::UserLevel;
 use crate::text;
 use crate::Data;
 use serenity::all::FullEvent;
+use std::sync::Arc;
 
 async fn handle_ai_mention(
     ctx: &serenity::client::Context,
@@ -31,7 +32,7 @@ async fn handle_ai_mention(
         return false;
     }
 
-    let config = data.config.read().await;
+    let config = data.config_snapshot().await;
     let level = UserLevel::of(msg.author.id.get(), &config);
     if !level.can_use_ai() {
         drop(config);
@@ -321,7 +322,7 @@ pub async fn handle_message(
         return;
     }
 
-    let config = data.config.read().await.clone();
+    let config = data.config_snapshot().await;
 
     // Intercept DMs or control channel messages from the owner
     let is_control_channel = config.logging.control_channel_id != 0
@@ -357,7 +358,8 @@ pub async fn handle_message(
         None => return,
     };
 
-    let config = data.config.read().await.clone();
+    let runtime = data.runtime_snapshot().await;
+    let config = Arc::clone(&runtime.config);
     let user_level = UserLevel::of(msg.author.id.get(), &config);
     if !user_level.can_use_tts() {
         return;
@@ -401,8 +403,9 @@ pub async fn handle_message(
             &filtered,
             &data.language_detector,
         );
-        let normalizer = data.normalizer.read().await.clone();
-        let processed = normalizer.expand_for_language(&filtered, is_english);
+        let processed = runtime
+            .normalizer
+            .expand_for_language(&filtered, is_english);
         if processed.is_empty() {
             return None;
         }
@@ -422,9 +425,12 @@ pub async fn handle_message(
                 }
             };
 
-        let is_female = data.state.is_female(msg.author.id);
+        let is_female = data
+            .state
+            .gender_override(msg.author.id)
+            .unwrap_or(runtime.default_female);
         let voice = select_voice(&config, is_english, is_female);
-        let tts_engine = data.tts_engine.read().await.clone();
+        let tts_engine = Arc::clone(&runtime.tts_engine);
         let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
 
         let start_time = std::time::Instant::now();
@@ -675,7 +681,7 @@ pub async fn event_handler(
         FullEvent::GuildCreate { guild, .. } => {
             let guild_id = guild.id;
             let rank_config = {
-                let config = data.config.read().await;
+                let config = data.config_snapshot().await;
                 config.rank.guild_config(guild_id.get())
             };
             let should_reconcile = data

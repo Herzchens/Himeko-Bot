@@ -19,7 +19,7 @@ pub struct Sender<T: Read + Write> {
 }
 
 impl<T: Read + Write> Sender<T> {
-    /// Synthesize text to speech with a [SpeechConfig] synchronously.  
+    /// Synthesize text to speech with a [SpeechConfig] synchronously.
     /// **Caution**: One [send](Self::send) corresponds to multiple [read](Receiver::read). Next [send](Self::send) call will block until there no data to read.
     /// [read](Receiver::read) will block before you call a [send](Self::send).
     pub fn send(&mut self, text: &str, config: &SpeechConfig) -> Result<()> {
@@ -57,7 +57,7 @@ pub struct Receiver<T: Read + Write> {
 }
 
 impl<T: Read + Write> Receiver<T> {
-    /// Read Synthesized Audio synchronously.  
+    /// Read Synthesized Audio synchronously.
     /// **Caution**: One [send](Sender::send) corresponds to multiple [read](Self::read). Next [send](Sender::send) call will block until there no data to read.
     /// [read](Self::read) will block before you call a [send](Sender::send).
     pub fn read(&mut self) -> Result<Option<SynthesizedResponse>> {

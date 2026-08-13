@@ -8,7 +8,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 /// Cho bot vào voice channel hiện tại của bạn
 #[poise::command(slash_command, guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
-    let config = ctx.data().config.read().await.clone();
+    let config = ctx.data().config_snapshot().await;
     let level = UserLevel::of(ctx.author().id.get(), &config);
 
     if !level.can_join() {

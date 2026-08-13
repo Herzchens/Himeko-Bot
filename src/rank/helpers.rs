@@ -35,7 +35,7 @@ pub async fn guild_rank_config(ctx: Context<'_>) -> anyhow::Result<(GuildId, Gui
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| anyhow::anyhow!("rank commands require a guild"))?;
-    let config = ctx.data().config.read().await;
+    let config = ctx.data().config_snapshot().await;
     let rank = config
         .rank
         .guild_config(guild_id.get())
