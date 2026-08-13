@@ -13,24 +13,31 @@ async fn handle_ai_mention(
         return false;
     }
 
-    let bot_mention_1 = format!("<@{}>", current_user_id);
-    let bot_mention_2 = format!("<@!{}>", current_user_id);
-    
+    let bot_mention_1 = format!("<@{current_user_id}>");
+    let bot_mention_2 = format!("<@!{current_user_id}>");
+
     if !msg.content.contains(&bot_mention_1) && !msg.content.contains(&bot_mention_2) {
         return false;
     }
 
-    let question = msg.content
+    let question = msg
+        .content
         .replace(&bot_mention_1, "")
         .replace(&bot_mention_2, "")
         .trim()
         .to_string();
-        
+
     if question.is_empty() {
         return false;
     }
 
     let config = data.config.read().await;
+    let level = UserLevel::of(msg.author.id.get(), &config);
+    if !level.can_use_ai() {
+        drop(config);
+        let _ = msg.reply(&ctx.http, "❌ Bạn không có quyền dùng AI.").await;
+        return true;
+    }
     if !config.ai.enabled {
         return false;
     }
@@ -41,18 +48,31 @@ async fn handle_ai_mention(
     let custom_answers = config.ai.custom_answers.clone();
     let use_search = config.ai.google_search;
     drop(config);
-    
+
     if api_key.is_empty() {
-        let _ = msg.reply(&ctx.http, format!("❌ API Key cho provider '{:?}' chưa được cấu hình.", provider)).await;
+        let _ = msg
+            .reply(
+                &ctx.http,
+                format!("❌ API Key cho provider '{provider:?}' chưa được cấu hình."),
+            )
+            .await;
         return true;
     }
-    
+
     let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
-    
+
     tracing::info!(user = %msg.author.id, question = %question, "Processing AI request");
-    
-    let ai_result = crate::ai::ask_ai(provider, &api_key, &model, &question, &custom_answers, use_search).await;
-    
+
+    let ai_result = crate::ai::ask_ai(
+        provider,
+        &api_key,
+        &model,
+        &question,
+        &custom_answers,
+        use_search,
+    )
+    .await;
+
     match ai_result {
         Ok(answer) => {
             tracing::info!(user = %msg.author.id, answer_len = answer.len(), "AI request successful");
@@ -67,7 +87,7 @@ async fn handle_ai_mention(
             }
         }
         Err(e) => {
-            let _ = msg.reply(&ctx.http, format!("❌ Lỗi AI: {}", e)).await;
+            let _ = msg.reply(&ctx.http, format!("❌ Lỗi AI: {e}")).await;
             tracing::error!("AI mention error: {}", e);
         }
     }
@@ -75,11 +95,15 @@ async fn handle_ai_mention(
 }
 
 fn detect_language(text: &str, text_to_speak: &str, detector: &lingua::LanguageDetector) -> bool {
-    let eng_exceptions = ["no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice"];
+    let eng_exceptions = [
+        "no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice",
+    ];
     if eng_exceptions.contains(&text) {
         return true;
     }
-    let has_vn_chars = text.chars().any(|c| "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ".contains(c));
+    let has_vn_chars = text
+        .chars()
+        .any(|c| "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ".contains(c));
     if has_vn_chars {
         return false;
     }
@@ -87,11 +111,11 @@ fn detect_language(text: &str, text_to_speak: &str, detector: &lingua::LanguageD
     detected_lang == Some(lingua::Language::English)
 }
 
-fn select_voice(
-    config: &crate::config::Config,
-    is_english: bool,
-    is_female: bool,
-) -> String {
+fn select_voice(config: &crate::config::Config, is_english: bool, is_female: bool) -> String {
+    if config.tts.provider == "gtts" {
+        return if is_english { "en" } else { "vi" }.to_string();
+    }
+
     if is_english {
         if is_female {
             config.tts.get_msedge_voice("en_female")
@@ -120,8 +144,7 @@ fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &
                     let lower = voice.to_lowercase();
                     let is_male = lower.contains("nam")
                         || lower.contains("guy")
-                        || lower.contains("male")
-                            && !lower.contains("female");
+                        || lower.contains("male") && !lower.contains("female");
                     let key = if is_male { "male" } else { "female" };
                     for map in list {
                         if let Some(val) = map.get(key) {
@@ -142,8 +165,7 @@ fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &
                     let lower = voice.to_lowercase();
                     let is_male = lower.contains("nam")
                         || lower.contains("guy")
-                        || lower.contains("male")
-                            && !lower.contains("female");
+                        || lower.contains("male") && !lower.contains("female");
                     let key = if is_male { "male" } else { "female" };
                     for map in list {
                         if let Some(val) = map.get(key) {
@@ -164,8 +186,7 @@ fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &
                     let lower = voice.to_lowercase();
                     let is_male = lower.contains("nam")
                         || lower.contains("guy")
-                        || lower.contains("male")
-                            && !lower.contains("female");
+                        || lower.contains("male") && !lower.contains("female");
                     let key = if is_male { "male" } else { "female" };
                     for map in list {
                         if let Some(val) = map.get(key) {
@@ -194,27 +215,50 @@ async fn handle_owner_dm(
         return;
     }
 
-    let via = if msg.guild_id.is_none() { "DM" } else { "control channel" };
+    let via = if msg.guild_id.is_none() {
+        "DM"
+    } else {
+        "control channel"
+    };
 
-    let active_chan_id = data.state.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+    let active_chan_id = data
+        .state
+        .active_console_channel
+        .load(std::sync::atomic::Ordering::SeqCst);
 
     if content.starts_with("/channel ") || content.starts_with(":channel ") {
         let id_str = content.split_whitespace().nth(1).unwrap_or("");
-        if let Ok(new_id) = id_str.parse::<u64>() {
-            data.state.active_console_channel.store(new_id, std::sync::atomic::Ordering::SeqCst);
-            let _ = msg.reply(ctx, format!("✅ Đã chuyển kênh console chat sang: <#{}>", new_id)).await;
-            tracing::info!(new_channel_id = new_id, "Active console chat channel set via DM");
+        if let Some(new_id) = id_str.parse::<u64>().ok().filter(|id| *id != 0) {
+            data.state
+                .active_console_channel
+                .store(new_id, std::sync::atomic::Ordering::SeqCst);
+            let _ = msg
+                .reply(
+                    ctx,
+                    format!("✅ Đã chuyển kênh console chat sang: <#{new_id}>"),
+                )
+                .await;
+            tracing::info!(
+                new_channel_id = new_id,
+                "Active console chat channel set via DM"
+            );
         } else {
-            let _ = msg.reply(ctx, "❌ ID kênh không hợp lệ. Cú pháp: `/channel <ID>`").await;
+            let _ = msg
+                .reply(ctx, "❌ ID kênh không hợp lệ. Cú pháp: `/channel <ID>`")
+                .await;
         }
         return;
     }
 
-    if content.starts_with("/reply ") || content.starts_with("/r ") || content.starts_with(":reply ") || content.starts_with(":r ") {
+    if content.starts_with("/reply ")
+        || content.starts_with("/r ")
+        || content.starts_with(":reply ")
+        || content.starts_with(":r ")
+    {
         let parts: Vec<&str> = content.split_whitespace().collect();
         if parts.len() >= 3 {
             if let Ok(idx) = parts[1].parse::<usize>() {
-                if idx >= 1 && idx <= 10 {
+                if (1..=10).contains(&idx) {
                     let msg_id_opt = {
                         if let Ok(guard) = data.state.recent_messages.lock() {
                             guard[idx - 1]
@@ -238,7 +282,9 @@ async fn handle_owner_dm(
                                 tracing::info!(channel = active_chan_id, message = %reply_text, reply_to = %msg_id, "Sent reply via {}", via);
                             }
                             Err(e) => {
-                                let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {}", e)).await;
+                                let _ = msg
+                                    .reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {e}"))
+                                    .await;
                             }
                         }
                         return;
@@ -246,12 +292,22 @@ async fn handle_owner_dm(
                 }
             }
         }
-        let _ = msg.reply(ctx, "❌ Cú pháp không hợp lệ. Cú pháp: `/r <1-10> <nội dung>`").await;
+        let _ = msg
+            .reply(
+                ctx,
+                "❌ Cú pháp không hợp lệ. Cú pháp: `/r <1-10> <nội dung>`",
+            )
+            .await;
         return;
     }
 
     if active_chan_id == 0 {
-        let _ = msg.reply(ctx, "❌ Chưa chọn kênh chat. Vui lòng dùng lệnh `/channel <ID>` trước.").await;
+        let _ = msg
+            .reply(
+                ctx,
+                "❌ Chưa chọn kênh chat. Vui lòng dùng lệnh `/channel <ID>` trước.",
+            )
+            .await;
         return;
     }
 
@@ -262,7 +318,9 @@ async fn handle_owner_dm(
             tracing::info!(channel = active_chan_id, message = %content, "Sent message via {}", via);
         }
         Err(e) => {
-            let _ = msg.reply(ctx, format!("❌ Gửi tin nhắn thất bại: {}", e)).await;
+            let _ = msg
+                .reply(ctx, format!("❌ Gửi tin nhắn thất bại: {e}"))
+                .await;
         }
     }
 }
@@ -279,10 +337,12 @@ pub async fn handle_message(
     let config = data.config.read().await.clone();
 
     // Intercept DMs or control channel messages from the owner
-    let is_control_channel = config.logging.control_channel_id != 0 
+    let is_control_channel = config.logging.control_channel_id != 0
         && msg.channel_id.get() == config.logging.control_channel_id;
 
-    if (msg.guild_id.is_none() || is_control_channel) && msg.author.id.get() == config.permissions.owner_id {
+    if (msg.guild_id.is_none() || is_control_channel)
+        && msg.author.id.get() == config.permissions.owner_id
+    {
         handle_owner_dm(ctx, msg, data).await;
         return;
     }
@@ -291,10 +351,16 @@ pub async fn handle_message(
         return;
     }
 
-    let active_chan = data.state.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+    let active_chan = data
+        .state
+        .active_console_channel
+        .load(std::sync::atomic::Ordering::SeqCst);
     if active_chan != 0 && msg.channel_id.get() == active_chan {
         let idx = {
-            let counter = data.state.message_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let counter = data
+                .state
+                .message_counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let idx = counter % 10;
             if let Ok(mut guard) = data.state.recent_messages.lock() {
                 guard[idx] = Some(msg.id);
@@ -316,84 +382,169 @@ pub async fn handle_message(
 
     let config = data.config.read().await.clone();
     let user_level = UserLevel::of(msg.author.id.get(), &config);
-    if !user_level.can_use_tts() || data.state.is_idle(guild_id) {
+    if !user_level.can_use_tts() {
         return;
     }
+    let Some(session) = data.state.get_session(guild_id) else {
+        return;
+    };
+
+    let Some(ticket) = data.tts_scheduler.try_admit(guild_id, session.generation) else {
+        tracing::warn!(
+            guild = %guild_id,
+            user = %msg.author.id,
+            generation = session.generation,
+            "TTS admission limit reached; dropping message to preserve bounded latency"
+        );
+        return;
+    };
+    let sequence = ticket.sequence();
 
     let manager = match songbird::get(ctx).await {
-        Some(m) => m,
+        Some(manager) => manager,
         None => {
             tracing::error!("songbird not registered — check Client::register_songbird()");
+            if let Some(mut emission) = ticket.complete(None).await {
+                while emission.next_ready().await.is_some() {}
+            }
             return;
         }
     };
 
-    if manager.get(guild_id).is_none() {
-        return;
-    }
+    let audio_outcome: Option<Vec<Vec<u8>>> = async {
+        manager.get(guild_id)?;
 
-    let normalizer = data.normalizer.read().await.clone();
-    let processed = text::prepare_for_tts(ctx, msg, &normalizer).await;
-    if processed.is_empty() {
-        return;
-    }
-
-    let text_to_speak = if config.tts.max_chars > 0 && processed.chars().count() > config.tts.max_chars {
-        processed.chars().take(config.tts.max_chars).collect::<String>()
-    } else {
-        processed
-    };
-
-    let is_english = detect_language(&text_to_speak.trim().to_lowercase(), &text_to_speak, &data.language_detector);
-    let is_female = data.state.is_female(msg.author.id);
-    let voice = select_voice(&config, is_english, is_female);
-
-    let tts_engine = data.tts_engine.read().await.clone();
-
-    let start_time = std::time::Instant::now();
-    let audio_bytes = match tts_engine.synthesize(&text_to_speak, &voice).await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!(guild = %guild_id, user = %msg.author.id, error = %e, "TTS synthesis failed");
-            return;
+        let filtered = text::prepare_for_tts(ctx, msg).await;
+        if filtered.is_empty() {
+            return None;
         }
-    };
-    let elapsed_ms = start_time.elapsed().as_millis();
 
-    let log_voice = resolve_log_voice(&config, &voice);
-    tracing::info!(
-        guild = %guild_id,
-        user = %msg.author.id,
-        provider = %config.tts.provider,
-        chars = text_to_speak.len(),
-        voice = %log_voice,
-        audio_bytes = audio_bytes.len(),
-        elapsed_ms = elapsed_ms,
-        "TTS synthesized"
-    );
+        let is_english = detect_language(
+            &filtered.trim().to_lowercase(),
+            &filtered,
+            &data.language_detector,
+        );
+        let normalizer = data.normalizer.read().await.clone();
+        let processed = normalizer.expand_for_language(&filtered, is_english);
+        if processed.is_empty() {
+            return None;
+        }
 
-    if audio_bytes.is_empty() {
-        tracing::error!("TTS engine returned 0 bytes! (Check if the voice name is correct or if text is empty)");
-        return;
+        let logical_chunks =
+            crate::tts::chunking::split_soft_chars(&processed, config.tts.max_chars);
+        if logical_chunks.is_empty() {
+            return None;
+        }
+
+        let is_female = data.state.is_female(msg.author.id);
+        let voice = select_voice(&config, is_english, is_female);
+        let tts_engine = data.tts_engine.read().await.clone();
+        let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
+
+        let start_time = std::time::Instant::now();
+        let mut audio_chunks = Vec::new();
+        for chunk in &logical_chunks {
+            match tts_engine.synthesize_chunks(chunk, &voice).await {
+                Ok(chunks)
+                    if !chunks.is_empty() && chunks.iter().all(|bytes| !bytes.is_empty()) =>
+                {
+                    audio_chunks.extend(chunks);
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        guild = %guild_id,
+                        user = %msg.author.id,
+                        sequence,
+                        "TTS engine returned empty audio chunks"
+                    );
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        guild = %guild_id,
+                        user = %msg.author.id,
+                        sequence,
+                        error = %error,
+                        "TTS synthesis failed"
+                    );
+                    return None;
+                }
+            }
+        }
+        drop(synthesis_permit);
+
+        if !data.state.is_current_session(guild_id, session.generation) {
+            tracing::debug!(
+                guild = %guild_id,
+                generation = session.generation,
+                sequence,
+                "discarding TTS synthesized for a stale voice session"
+            );
+            return None;
+        }
+
+        let total_audio_bytes: usize = audio_chunks.iter().map(Vec::len).sum();
+        let log_voice = resolve_log_voice(&config, &voice);
+        tracing::info!(
+            guild = %guild_id,
+            user = %msg.author.id,
+            provider = %config.tts.provider,
+            chars = processed.chars().count(),
+            logical_chunks = logical_chunks.len(),
+            audio_chunks = audio_chunks.len(),
+            sequence,
+            voice = %log_voice,
+            audio_bytes = total_audio_bytes,
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "TTS synthesized"
+        );
+        Some(audio_chunks)
     }
+    .await;
 
-    let queue_lock = data.state.get_queue_lock(guild_id);
-    let _guard = queue_lock.lock().await;
-    if let Some(handler_lock) = manager.get(guild_id) {
-        let input = songbird::input::Input::from(audio_bytes);
-        let mut handler = handler_lock.lock().await;
-        handler.enqueue_input(input).await;
+    let Some(mut emission) = ticket.complete(audio_outcome).await else {
+        return;
+    };
+
+    while let Some(ready) = emission.next_ready().await {
+        tracing::debug!(
+            guild = %guild_id,
+            generation = session.generation,
+            sequence = ready.sequence,
+            chunks = ready.audio_chunks.len(),
+            "emitting synthesized TTS in admission order"
+        );
+
+        for audio_bytes in ready.audio_chunks {
+            let Some(playback_permit) = emission.acquire_playback().await else {
+                return;
+            };
+
+            let queue_lock = data.state.get_queue_lock(guild_id);
+            let _operation = queue_lock.lock().await;
+            if !data.state.is_current_session(guild_id, session.generation) {
+                return;
+            }
+
+            let Some(handler_lock) = manager.get(guild_id) else {
+                return;
+            };
+            let track =
+                crate::tts::scheduler::track_with_playback_permit(audio_bytes, playback_permit);
+            let mut handler = handler_lock.lock().await;
+            handler.enqueue(track).await;
+        }
     }
 }
 
 async fn attempt_rejoin(
     ctx: &serenity::client::Context,
     guild_id: serenity::model::id::GuildId,
-    channel_id: serenity::model::id::ChannelId,
+    session: crate::state::VoiceSession,
     data: &Data,
 ) {
     let manager = match songbird::get(ctx).await {
-        Some(m) => m,
+        Some(manager) => manager,
         None => return,
     };
 
@@ -401,19 +552,84 @@ async fn attempt_rejoin(
         let delay = std::time::Duration::from_secs(1 << (attempt - 1));
         tokio::time::sleep(delay).await;
 
-        match manager.join(guild_id, channel_id).await {
+        if !data.state.is_current_session(guild_id, session.generation) {
+            tracing::debug!(
+                guild = %guild_id,
+                generation = session.generation,
+                "aborting stale auto-rejoin task"
+            );
+            return;
+        }
+
+        let queue_lock = data.state.get_queue_lock(guild_id);
+        let _operation = queue_lock.lock().await;
+        let Some(current) = data.state.get_session(guild_id) else {
+            return;
+        };
+        if current.generation != session.generation {
+            return;
+        }
+
+        match manager.join(guild_id, current.channel_id).await {
             Ok(_) => {
-                tracing::info!(guild = %guild_id, channel = %channel_id, attempt, "auto-rejoin succeeded");
+                tracing::info!(
+                    guild = %guild_id,
+                    channel = %current.channel_id,
+                    generation = current.generation,
+                    attempt,
+                    "auto-rejoin succeeded"
+                );
                 return;
             }
-            Err(e) => {
-                tracing::warn!(guild = %guild_id, attempt, error = %e, "auto-rejoin failed");
+            Err(error) => {
+                tracing::warn!(
+                    guild = %guild_id,
+                    generation = current.generation,
+                    attempt,
+                    error = %error,
+                    "auto-rejoin failed"
+                );
             }
         }
     }
 
-    tracing::error!(guild = %guild_id, "auto-rejoin exhausted all attempts, clearing session");
-    data.state.clear_session(guild_id);
+    let queue_lock = data.state.get_queue_lock(guild_id);
+    let _operation = queue_lock.lock().await;
+    if !data.state.is_current_session(guild_id, session.generation) {
+        return;
+    }
+
+    tracing::error!(
+        guild = %guild_id,
+        generation = session.generation,
+        "auto-rejoin exhausted all attempts"
+    );
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        {
+            let handler = handler_lock.lock().await;
+            handler.queue().stop();
+        }
+        if let Err(error) = manager.remove(guild_id).await {
+            tracing::error!(
+                guild = %guild_id,
+                generation = session.generation,
+                error = %error,
+                "failed to release Songbird Call after rejoin exhaustion"
+            );
+            return;
+        }
+    }
+
+    let cleared = data
+        .state
+        .clear_session_if_generation(guild_id, session.generation);
+    drop(_operation);
+    if cleared {
+        data.tts_scheduler
+            .cancel_generation(guild_id, session.generation)
+            .await;
+    }
 }
 
 async fn handle_voice_state_update(
@@ -422,13 +638,32 @@ async fn handle_voice_state_update(
     data: &Data,
 ) {
     let bot_id = ctx.cache.current_user().id;
-    if new.user_id == bot_id && new.channel_id.is_none() {
-        if let Some(guild_id) = new.guild_id {
-            if let Some(session) = data.state.get_session(guild_id) {
-                tracing::warn!(guild = %guild_id, "bot disconnected from voice, attempting rejoin");
-                attempt_rejoin(ctx, guild_id, session.channel_id, data).await;
-            }
+    if new.user_id != bot_id {
+        return;
+    }
+
+    let Some(guild_id) = new.guild_id else {
+        return;
+    };
+
+    if let Some(channel_id) = new.channel_id {
+        if data.state.update_session_channel(guild_id, channel_id) {
+            tracing::debug!(
+                guild = %guild_id,
+                channel = %channel_id,
+                "updated voice session after bot channel move"
+            );
         }
+        return;
+    }
+
+    if let Some(session) = data.state.get_session(guild_id) {
+        tracing::warn!(
+            guild = %guild_id,
+            generation = session.generation,
+            "bot disconnected from voice, attempting rejoin"
+        );
+        attempt_rejoin(ctx, guild_id, session, data).await;
     }
 }
 
@@ -448,8 +683,70 @@ pub async fn event_handler(
             event: event_data,
         } => {
             crate::events::member_update::handle_member_update(
-                ctx, old_if_available, new, event_data, data,
-            ).await;
+                ctx,
+                old_if_available,
+                new,
+                event_data,
+                data,
+            )
+            .await;
+        }
+        FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
+            let rank_enabled_here = {
+                let config = data.config.read().await;
+                config.rank.guild_config(guild_id.get()).is_some()
+            };
+            if rank_enabled_here {
+                if let Err(error) = crate::rank::service::remove_departed_user(
+                    &data.rank_store,
+                    guild_id.get(),
+                    user.id.get(),
+                )
+                .await
+                {
+                    tracing::error!(
+                        guild = %guild_id,
+                        user = %user.id,
+                        %error,
+                        "failed to remove departed user from guild rank database"
+                    );
+                }
+            }
+        }
+        FullEvent::GuildDelete { incomplete, .. } => {
+            if !incomplete.unavailable {
+                let guild_id = incomplete.id;
+                let old_session = data.state.get_session(guild_id);
+                if let Some(session) = old_session {
+                    let queue_lock = data.state.get_queue_lock(guild_id);
+                    let operation = queue_lock.lock().await;
+                    let cleared = data
+                        .state
+                        .clear_session_if_generation(guild_id, session.generation);
+                    drop(operation);
+                    if cleared {
+                        data.tts_scheduler
+                            .cancel_generation(guild_id, session.generation)
+                            .await;
+                    }
+                }
+
+                if let Some(manager) = songbird::get(ctx).await {
+                    if let Some(handler_lock) = manager.get(guild_id) {
+                        let handler = handler_lock.lock().await;
+                        handler.queue().stop();
+                    }
+                    if let Err(error) = manager.remove(guild_id).await {
+                        tracing::warn!(
+                            guild = %guild_id,
+                            %error,
+                            "failed to release Songbird call after permanent guild removal"
+                        );
+                    }
+                }
+                data.rank_store.clear_runtime_guild(guild_id.get());
+                tracing::info!(guild = %guild_id, "cleaned runtime state after permanent guild removal");
+            }
         }
         FullEvent::VoiceStateUpdate { new, .. } => {
             handle_voice_state_update(ctx, new, data).await;

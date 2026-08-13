@@ -1,25 +1,26 @@
+pub mod ai;
 mod commands;
 mod config;
 mod events;
+pub mod logging;
 mod permissions;
+pub mod rank;
 mod state;
 mod text;
+mod tls;
 mod tts;
-pub mod ai;
-pub mod rank;
-pub mod logging;
 
 use config::Config;
 use state::BotState;
 use std::sync::Arc;
 use text::normalizer::Normalizer;
+use tokio::sync::RwLock;
 use tts::engine::MsEdgeEngine;
 use tts::gtts::GttsEngine;
-use tts::supertonic::SupertonicEngine;
 use tts::openai::OpenAiEngine;
+use tts::supertonic::SupertonicEngine;
 use tts::vieneu::VieneuEngine;
 use tts::TtsEngine;
-use tokio::sync::RwLock;
 
 use serenity::prelude::GatewayIntents;
 use songbird::SerenityInit;
@@ -29,16 +30,15 @@ pub struct Data {
     pub state: BotState,
     pub normalizer: RwLock<Arc<Normalizer>>,
     pub tts_engine: RwLock<Arc<dyn TtsEngine>>,
+    pub tts_scheduler: Arc<tts::scheduler::TtsScheduler>,
     pub language_detector: lingua::LanguageDetector,
-    pub rank_db: Arc<tokio::sync::RwLock<rank::db::RankDatabase>>,
+    pub rank_store: Arc<rank::db::RankStore>,
 }
-
-
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    
+    tls::install_crypto_provider()?;
+
     let config = Config::load("config.yml")?;
     let config = Arc::new(config);
 
@@ -50,7 +50,8 @@ async fn main() -> anyhow::Result<()> {
     let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
 
     let _log_task_handle = if !config.logging.webhook_url.is_empty() {
-        let (discord_layer, log_task) = logging::start_discord_logging(config.logging.webhook_url.clone());
+        let (discord_layer, log_task) =
+            logging::start_discord_logging(config.logging.webhook_url.clone());
         let registry = registry.with(discord_layer);
         registry.init();
         Some(log_task)
@@ -61,14 +62,18 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("config loaded — owner_id={}", config.permissions.owner_id);
 
-    let rank_db = Arc::new(tokio::sync::RwLock::new(
-        rank::db::RankDatabase::load("database.yml").unwrap_or_default()
-    ));
-
-    let state = BotState::default();
-    state.active_console_channel.store(config.console_chat.default_channel_id, std::sync::atomic::Ordering::SeqCst);
+    let rank_store = Arc::new(rank::db::RankStore::open(
+        "database.yml",
+        config.rank.legacy_guild_id(),
+    )?);
 
     let default_female = config.tts.default_gender == "female";
+    let state = BotState::new(default_female);
+    state.active_console_channel.store(
+        config.console_chat.default_channel_id,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+
     tracing::info!(
         default_voice = if default_female { "female" } else { "male" },
         "TTS engine configured"
@@ -86,31 +91,35 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(GttsEngine::new())
         }
         "supertonic" => {
-            let st_cfg = config.tts.get_supertonic_config()
-                .ok_or_else(|| anyhow::anyhow!("tts.supertonic section required when provider = \"supertonic\""))?;
+            let st_cfg = config.tts.get_supertonic_config().ok_or_else(|| {
+                anyhow::anyhow!("tts.supertonic section required when provider = \"supertonic\"")
+            })?;
             tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
             Arc::new(SupertonicEngine::new(st_cfg))
         }
         "openai" => {
-            let oa_cfg = config.tts.get_openai_config()
-                .ok_or_else(|| anyhow::anyhow!("tts.openai section required when provider = \"openai\""))?;
+            let oa_cfg = config.tts.get_openai_config().ok_or_else(|| {
+                anyhow::anyhow!("tts.openai section required when provider = \"openai\"")
+            })?;
             tracing::info!(url = %oa_cfg.api_url, model = %oa_cfg.model, "using OpenAI-compatible engine");
             Arc::new(OpenAiEngine::new(oa_cfg))
         }
         "vieneu" => {
-            let vn_cfg = config.tts.get_vieneu_config()
-                .ok_or_else(|| anyhow::anyhow!("tts.vieneu section required when provider = \"vieneu\""))?;
+            let vn_cfg = config.tts.get_vieneu_config().ok_or_else(|| {
+                anyhow::anyhow!("tts.vieneu section required when provider = \"vieneu\"")
+            })?;
             tracing::info!(server = %vn_cfg.server_url, "using VieNeu-TTS engine");
-            Arc::new(VieneuEngine::new(vn_cfg))
+            Arc::new(VieneuEngine::new(vn_cfg).await?)
         }
-        _ => {
+        "msedge" => {
             tracing::info!("using MsEdge engine");
             Arc::new(MsEdgeEngine::new(config.tts.clone()))
         }
+        other => anyhow::bail!("unsupported tts provider after validation: {other}"),
     };
 
     let config_clone = Arc::clone(&config);
-    let rank_db_setup = Arc::clone(&rank_db);
+    let rank_store_setup = Arc::clone(&rank_store);
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![
@@ -136,19 +145,26 @@ async fn main() -> anyhow::Result<()> {
         })
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                let guild_id = serenity::all::GuildId::new(config_clone.rank.guild_id);
-                if guild_id.get() != 0 {
-                    poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id).await?;
-                    tracing::info!(guild_id = guild_id.get(), "Slash commands registered locally in guild (instant update)");
-                } else {
-                    poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                    tracing::info!("Slash commands registered globally");
-                }
-
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 tracing::info!(
                     commands = framework.options().commands.len(),
-                    "slash commands registered in guilds (instant update)"
+                    "slash commands registered globally"
                 );
+
+                // PR #9 switched the application to one guild-scoped command set. Global and
+                // guild application command scopes coexist, so clear old guild-local definitions
+                // after the global set is installed. Failure in one guild is observable but does
+                // not make the bot unavailable everywhere else.
+                for guild_id in ctx.cache.guilds() {
+                    if let Err(error) = guild_id.set_commands(&ctx.http, Vec::new()).await {
+                        tracing::warn!(
+                            guild = %guild_id,
+                            %error,
+                            "failed to clear stale guild-scoped application commands"
+                        );
+                    }
+                }
+
                 let config_rwlock = Arc::new(RwLock::new(config_clone.clone()));
 
                 if config_clone.console_chat.enabled {
@@ -159,10 +175,8 @@ async fn main() -> anyhow::Result<()> {
                     tokio::spawn(async move {
                         use tokio::io::{AsyncBufReadExt, BufReader};
                         let mut reader = BufReader::new(tokio::io::stdin()).lines();
-                        let mut active_channel_id = initial_channel_id;
-
                         tracing::info!(
-                            default_channel = active_channel_id,
+                            default_channel = initial_channel_id,
                             "Console chat listener task started. Type messages to send to Discord. Type /channel <ID> to swap."
                         );
 
@@ -174,10 +188,9 @@ async fn main() -> anyhow::Result<()> {
 
                             if line.starts_with("/channel ") || line.starts_with(":channel ") {
                                 let id_str = line.split_whitespace().nth(1).unwrap_or("");
-                                if let Ok(new_id) = id_str.parse::<u64>() {
-                                    active_channel_id = new_id;
+                                if let Some(new_id) = id_str.parse::<u64>().ok().filter(|id| *id != 0) {
                                     state_clone.active_console_channel.store(new_id, std::sync::atomic::Ordering::SeqCst);
-                                    tracing::info!(new_channel_id = active_channel_id, "Active console chat channel set");
+                                    tracing::info!(new_channel_id = new_id, "Active console chat channel set");
                                 } else {
                                     tracing::warn!("Invalid channel ID format. Usage: /channel <ID>");
                                 }
@@ -188,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
                                 let parts: Vec<&str> = line.split_whitespace().collect();
                                 if parts.len() >= 3 {
                                     if let Ok(idx) = parts[1].parse::<usize>() {
-                                        if idx >= 1 && idx <= 10 {
+                                        if (1..=10).contains(&idx) {
                                             let msg_id_opt = {
                                                 if let Ok(guard) = state_clone.recent_messages.lock() {
                                                     guard[idx - 1]
@@ -198,6 +211,11 @@ async fn main() -> anyhow::Result<()> {
                                             };
                                             if let Some(msg_id) = msg_id_opt {
                                                 let reply_text = parts[2..].join(" ");
+                                                let active_channel_id = state_clone.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+                                                if active_channel_id == 0 {
+                                                    tracing::warn!("No active console channel selected");
+                                                    continue;
+                                                }
                                                 let chan = serenity::all::ChannelId::new(active_channel_id);
                                                 let msg_ref = serenity::all::CreateMessage::new()
                                                     .content(&reply_text)
@@ -219,6 +237,11 @@ async fn main() -> anyhow::Result<()> {
                                 continue;
                             }
 
+                            let active_channel_id = state_clone.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
+                            if active_channel_id == 0 {
+                                tracing::warn!("No active console channel selected");
+                                continue;
+                            }
                             let chan = serenity::all::ChannelId::new(active_channel_id);
                             match chan.say(&http_console, line).await {
                                 Ok(_) => {
@@ -241,20 +264,20 @@ async fn main() -> anyhow::Result<()> {
                     let mut was_empty = None;
                     loop {
                         let config = config_for_task.read().await.clone();
-                        
+
                         if !config.voice_status.enabled {
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             continue;
                         }
 
-                        let channel_id = serenity::all::ChannelId::new(config.voice_status.channel_id);
                         let steps = &config.voice_status.steps;
                         let interval = std::time::Duration::from_secs(config.voice_status.interval_secs.max(10));
 
-                        if channel_id.get() == 0 || steps.is_empty() {
+                        if config.voice_status.channel_id == 0 || steps.is_empty() {
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             continue;
                         }
+                        let channel_id = serenity::all::ChannelId::new(config.voice_status.channel_id);
 
                         // Check member count in target voice channel (excluding bots)
                         let mut member_count = 0;
@@ -289,8 +312,14 @@ async fn main() -> anyhow::Result<()> {
                                 let map = serde_json::json!({
                                     "status": ""
                                 });
-                                let _ = http_for_task.edit_voice_status(channel_id, &map, None).await;
-                                was_empty = Some(true);
+                                match http_for_task.edit_voice_status(channel_id, &map, None).await {
+                                    Ok(_) => was_empty = Some(true),
+                                    Err(error) => tracing::warn!(
+                                        %error,
+                                        channel_id = channel_id.get(),
+                                        "Failed to clear voice channel status; will retry"
+                                    ),
+                                }
                             }
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             continue;
@@ -347,50 +376,42 @@ async fn main() -> anyhow::Result<()> {
                     state,
                     normalizer: RwLock::new(normalizer),
                     tts_engine: RwLock::new(tts_engine),
+                    tts_scheduler: Arc::new(tts::scheduler::TtsScheduler::default()),
                     language_detector: lingua::LanguageDetectorBuilder::from_languages(&[lingua::Language::Vietnamese, lingua::Language::English]).build(),
-                    rank_db: Arc::clone(&rank_db_setup),
+                    rank_store: Arc::clone(&rank_store_setup),
                 };
 
                 if config_clone.rank.enabled {
-                    let mut db = rank_db_setup.write().await;
-                    if !db.initialized {
-                        tracing::info!("first-run: scanning guild members...");
-                        let guild_id = serenity::all::GuildId::new(config_clone.rank.guild_id);
-                        let mut after: Option<serenity::all::UserId> = None;
-                        let mut total_added = 0u32;
-
-                        loop {
-                            let members_res: Result<Vec<serenity::all::Member>, serenity::all::Error> = guild_id.members(&ctx.http, Some(1000), after).await;
-                            match members_res {
-                                Ok(members) => {
-                                    if members.is_empty() { break; }
-                                    for member in &members {
-                                        if member.user.bot { continue; }
-                                        let uid = member.user.id.get().to_string();
-                                        if db.users.contains_key(&uid) { continue; }
-
-                                        let nick = member.nick.as_deref().unwrap_or(&member.user.name);
-                                        if let Some(level) = rank::logic::parse_nickname(&config_clone.rank, nick) {
-                                            db.users.insert(uid, rank::db::RankUserData {
-                                                level,
-                                                original_name: nick.to_string(),
-                                            });
-                                            total_added += 1;
-                                        }
-                                    }
-                                    after = members.last().map(|m| m.user.id);
-                                    if members.len() < 1000 { break; }
-                                }
-                                Err(e) => {
-                                    tracing::error!(error = %e, "Failed to fetch members for scan");
-                                    break;
-                                }
-                            }
+                    let remote = rank::service::SerenityRankRemote::new(
+                        ctx.http.as_ref(),
+                        ctx.cache.current_user().id,
+                    );
+                    for (guild_id, rank_config) in config_clone.rank.configured_guilds()? {
+                        match rank::service::initialize_if_needed(
+                            &rank_store_setup,
+                            &rank_config,
+                            guild_id,
+                            &remote,
+                        )
+                        .await
+                        {
+                            Ok(Some(report)) => tracing::info!(
+                                guild_id,
+                                added = report.added,
+                                updated = report.updated,
+                                removed = report.removed,
+                                "first-run rank scan complete"
+                            ),
+                            Ok(None) => tracing::debug!(
+                                guild_id,
+                                "rank guild already initialized"
+                            ),
+                            Err(error) => tracing::error!(
+                                guild_id,
+                                %error,
+                                "first-run rank scan failed; guild remains uninitialized"
+                            ),
                         }
-
-                        db.initialized = true;
-                        let _ = db.save("database.yml");
-                        tracing::info!(added = total_added, "first-run scan complete");
                     }
                 }
 
@@ -413,36 +434,54 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let config_scheduler = config.clone();
-    let rank_db_scheduler = Arc::clone(&rank_db);
+    let rank_store_scheduler = Arc::clone(&rank_store);
     let http_scheduler = Arc::clone(&client.http);
 
     tokio::spawn(async move {
         use tokio_cron_scheduler::{Job, JobScheduler};
         if config_scheduler.rank.enabled {
-            let sched = JobScheduler::new().await.unwrap();
+            let sched = match JobScheduler::new().await {
+                Ok(scheduler) => scheduler,
+                Err(error) => {
+                    tracing::error!(%error, "failed to create rank cron scheduler");
+                    return;
+                }
+            };
             let cron_expr = "0 0 9 15 * *";
-            let db_clone = Arc::clone(&rank_db_scheduler);
-            let cfg_clone = config_scheduler.clone();
-            let http_clone = Arc::clone(&http_scheduler);
+            let store = Arc::clone(&rank_store_scheduler);
+            let cfg = config_scheduler.clone();
+            let http = Arc::clone(&http_scheduler);
 
-            let job = Job::new_async_tz(
+            let job = match Job::new_async_tz(
                 cron_expr,
                 chrono_tz::Asia::Ho_Chi_Minh,
                 move |_uuid, _lock| {
-                    let db = Arc::clone(&db_clone);
-                    let cfg = cfg_clone.clone();
-                    let http = Arc::clone(&http_clone);
+                    let store = Arc::clone(&store);
+                    let cfg = cfg.clone();
+                    let http = Arc::clone(&http);
                     Box::pin(async move {
-                        if let Err(e) = run_monthly_ping(&db, &cfg.rank, &http).await {
-                            tracing::error!(error = %e, "monthly top3 ping failed");
+                        if let Err(error) = run_monthly_ping(&store, &cfg.rank, &http).await {
+                            tracing::error!(%error, "monthly rank ping failed");
                         }
                     })
                 },
-            ).unwrap();
+            ) {
+                Ok(job) => job,
+                Err(error) => {
+                    tracing::error!(%error, "failed to construct rank cron job");
+                    return;
+                }
+            };
 
-            sched.add(job).await.unwrap();
-            sched.start().await.unwrap();
-            tracing::info!("cron scheduler started for rank system");
+            if let Err(error) = sched.add(job).await {
+                tracing::error!(%error, "failed to add rank cron job");
+                return;
+            }
+            if let Err(error) = sched.start().await {
+                tracing::error!(%error, "failed to start rank cron scheduler");
+                return;
+            }
+            tracing::info!("cron scheduler started for multi-guild rank system");
         }
     });
 
@@ -453,38 +492,49 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_monthly_ping(
-    db_lock: &tokio::sync::RwLock<rank::db::RankDatabase>,
+    store: &rank::db::RankStore,
     rank_config: &config::RankConfig,
     http: &Arc<serenity::all::Http>,
 ) -> anyhow::Result<()> {
-    if rank_config.leaderboard_channel_id == 0 {
-        return Ok(());
+    for (guild_id, guild_config) in rank_config.configured_guilds()? {
+        let state = store.guild_snapshot(guild_id).await;
+        let top3 = rank::service::leaderboard(&state)
+            .into_iter()
+            .take(3)
+            .collect::<Vec<_>>();
+        if top3.is_empty() {
+            continue;
+        }
+
+        let lines = top3
+            .iter()
+            .enumerate()
+            .map(|(index, (user_id, level))| {
+                let medal = match index {
+                    0 => "🥇",
+                    1 => "🥈",
+                    2 => "🥉",
+                    _ => "  ",
+                };
+                format!("{medal} #{} <@{user_id}> (Lv.{level})", index + 1)
+            })
+            .collect::<Vec<_>>();
+
+        let embed = serenity::all::CreateEmbed::new()
+            .title("🎉 BẢNG VÀNG THÁNG NÀY 🎉")
+            .description(lines.join("\n"));
+        let channel_id = serenity::all::ChannelId::new(guild_config.leaderboard_channel_id);
+        if let Err(error) = channel_id
+            .send_message(http, serenity::all::CreateMessage::new().embed(embed))
+            .await
+        {
+            tracing::error!(
+                guild_id,
+                channel_id = guild_config.leaderboard_channel_id,
+                %error,
+                "failed to send monthly guild leaderboard"
+            );
+        }
     }
-
-    let db = db_lock.read().await;
-    let mut ranked_users: Vec<_> = db.users.iter().filter(|(_, u)| u.level > 0).collect();
-    if ranked_users.is_empty() { return Ok(()); }
-
-    ranked_users.sort_by(|(id_a, u_a), (id_b, u_b)| u_b.level.cmp(&u_a.level).then_with(|| id_a.cmp(id_b)));
-    let top3 = ranked_users.into_iter().take(3).collect::<Vec<_>>();
-
-    let mut lines = Vec::new();
-    for (i, (uid, user_data)) in top3.iter().enumerate() {
-        let medal = match i {
-            0 => "🥇",
-            1 => "🥈",
-            2 => "🥉",
-            _ => "  ",
-        };
-        lines.push(format!("{} #{} <@{}> (Lv.{})", medal, i + 1, uid, user_data.level));
-    }
-
-    let embed = serenity::all::CreateEmbed::new()
-        .title("🎉 BẢNG VÀNG THÁNG NÀY 🎉")
-        .description(lines.join("\n"));
-
-    let channel_id = serenity::all::ChannelId::new(rank_config.leaderboard_channel_id);
-    channel_id.send_message(http, serenity::all::CreateMessage::new().embed(embed)).await?;
-
     Ok(())
 }

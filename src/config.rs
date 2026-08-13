@@ -137,7 +137,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "F2".to_string() } else { "M1".to_string() }
+                if is_female {
+                    "F2".to_string()
+                } else {
+                    "M1".to_string()
+                }
             }
             "openai" => {
                 if let Some(ref list) = self.openai {
@@ -150,7 +154,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "nova".to_string() } else { "onyx".to_string() }
+                if is_female {
+                    "nova".to_string()
+                } else {
+                    "onyx".to_string()
+                }
             }
             "vieneu" => {
                 if let Some(ref list) = self.vieneu {
@@ -163,7 +171,11 @@ impl TtsConfig {
                         }
                     }
                 }
-                if is_female { "truc_ly".to_string() } else { "nam_phuong".to_string() }
+                if is_female {
+                    "truc_ly".to_string()
+                } else {
+                    "nam_phuong".to_string()
+                }
             }
             _ => {
                 let key = if is_female { "female" } else { "male" };
@@ -358,9 +370,9 @@ pub struct OpenAiTtsConfig {
 impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("failed to read config file '{}': {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("failed to read config file '{path}': {e}"))?;
         let config: Config = serde_yaml::from_str(&raw)
-            .map_err(|e| anyhow::anyhow!("failed to parse config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
         config.validate()?;
         Ok(config)
     }
@@ -375,8 +387,44 @@ impl Config {
         if self.permissions.owner_id == 0 {
             anyhow::bail!("permissions.owner_id must be set");
         }
-        if self.rank.enabled && self.rank.ranks.is_empty() {
-            anyhow::bail!("rank.ranks cannot be empty if rank system is enabled");
+        if !matches!(
+            self.tts.provider.as_str(),
+            "msedge" | "gtts" | "supertonic" | "openai" | "vieneu"
+        ) {
+            anyhow::bail!("unsupported tts.provider: {}", self.tts.provider);
+        }
+        if !matches!(self.tts.default_gender.as_str(), "female" | "male") {
+            anyhow::bail!("tts.default_gender must be either 'female' or 'male'");
+        }
+        if self.tts.provider == "gtts" && (self.tts.rate != 0 || self.tts.pitch != 0) {
+            anyhow::bail!("gTTS does not support tts.rate or tts.pitch; both must be 0");
+        }
+        match self.tts.provider.as_str() {
+            "supertonic" if self.tts.get_supertonic_config().is_none() => {
+                anyhow::bail!("tts.supertonic must be configured when provider is 'supertonic'");
+            }
+            "openai" if self.tts.get_openai_config().is_none() => {
+                anyhow::bail!("tts.openai must be configured when provider is 'openai'");
+            }
+            "vieneu" if self.tts.get_vieneu_config().is_none() => {
+                anyhow::bail!("tts.vieneu must be configured when provider is 'vieneu'");
+            }
+            _ => {}
+        }
+        if self.ai.enabled && !matches!(self.ai.provider.as_str(), "gemini" | "groq") {
+            anyhow::bail!("unsupported ai.provider: {}", self.ai.provider);
+        }
+        self.rank.validate()?;
+        if self.voice_status.enabled {
+            if self.voice_status.channel_id == 0 {
+                anyhow::bail!("voice_status.channel_id must be set when voice status is enabled");
+            }
+            if self.voice_status.interval_secs == 0 {
+                anyhow::bail!("voice_status.interval_secs must be greater than zero");
+            }
+            if self.voice_status.steps.is_empty() {
+                anyhow::bail!("voice_status.steps cannot be empty when voice status is enabled");
+            }
         }
         Ok(())
     }
@@ -396,6 +444,34 @@ pub struct RankConfig {
     pub stars_per_rank: u8,
     #[serde(default = "default_ranks")]
     pub ranks: Vec<String>,
+    #[serde(default)]
+    pub guilds: HashMap<String, GuildRankConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildRankConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub target_role_id: u64,
+    #[serde(default)]
+    pub leaderboard_channel_id: u64,
+    #[serde(default = "default_stars_per_rank")]
+    pub stars_per_rank: u8,
+    #[serde(default = "default_ranks")]
+    pub ranks: Vec<String>,
+}
+
+impl Default for GuildRankConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            target_role_id: 0,
+            leaderboard_channel_id: 0,
+            stars_per_rank: default_stars_per_rank(),
+            ranks: Vec::new(),
+        }
+    }
 }
 
 fn default_stars_per_rank() -> u8 {
@@ -403,21 +479,140 @@ fn default_stars_per_rank() -> u8 {
 }
 
 fn default_ranks() -> Vec<String> {
-    vec![]
+    Vec::new()
 }
 
-impl RankConfig {
+impl GuildRankConfig {
     pub fn max_level(&self) -> u8 {
-        (self.ranks.len() as u8) * self.stars_per_rank
+        self.ranks
+            .len()
+            .checked_mul(self.stars_per_rank as usize)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(u8::MAX)
     }
 
     pub fn level_to_display(&self, level: u8) -> anyhow::Result<(&str, u8)> {
-        if level == 0 || level > self.max_level() {
-            anyhow::bail!("level {} is out of bounds", level);
+        if self.stars_per_rank == 0 || level == 0 || level > self.max_level() {
+            anyhow::bail!("level {level} is out of bounds");
         }
-        let rank_idx = (level - 1) / self.stars_per_rank;
+        let rank_index = (level - 1) / self.stars_per_rank;
         let stars = (level - 1) % self.stars_per_rank + 1;
-        Ok((&self.ranks[rank_idx as usize], stars))
+        let rank = self
+            .ranks
+            .get(rank_index as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank index {rank_index} is out of bounds"))?;
+        Ok((rank, stars))
+    }
+
+    fn validate(&self, guild_id: u64) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if guild_id == 0 {
+            anyhow::bail!("rank guild id must be non-zero");
+        }
+        if self.target_role_id == 0 {
+            anyhow::bail!("rank target_role_id must be set for guild {guild_id}");
+        }
+        if self.leaderboard_channel_id == 0 {
+            anyhow::bail!("rank leaderboard_channel_id must be set for guild {guild_id}");
+        }
+        if self.stars_per_rank == 0 {
+            anyhow::bail!("rank stars_per_rank must be greater than zero for guild {guild_id}");
+        }
+        if self.ranks.is_empty() {
+            anyhow::bail!("rank ranks cannot be empty for guild {guild_id}");
+        }
+        let total_levels = self
+            .ranks
+            .len()
+            .checked_mul(self.stars_per_rank as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank level count overflow for guild {guild_id}"))?;
+        if total_levels > u8::MAX as usize {
+            anyhow::bail!(
+                "rank configuration for guild {guild_id} supports at most {} total levels",
+                u8::MAX
+            );
+        }
+        Ok(())
+    }
+}
+
+impl RankConfig {
+    fn legacy_guild_config(&self) -> GuildRankConfig {
+        GuildRankConfig {
+            enabled: self.enabled,
+            target_role_id: self.target_role_id,
+            leaderboard_channel_id: self.leaderboard_channel_id,
+            stars_per_rank: self.stars_per_rank,
+            ranks: self.ranks.clone(),
+        }
+    }
+
+    pub fn guild_config(&self, guild_id: u64) -> Option<GuildRankConfig> {
+        if !self.enabled || guild_id == 0 {
+            return None;
+        }
+        if let Some(config) = self.guilds.get(&guild_id.to_string()) {
+            return config.enabled.then(|| config.clone());
+        }
+        (self.guild_id == guild_id).then(|| self.legacy_guild_config())
+    }
+
+    pub fn configured_guilds(&self) -> anyhow::Result<Vec<(u64, GuildRankConfig)>> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        let mut configured = Vec::new();
+        for (raw_id, config) in &self.guilds {
+            let guild_id = raw_id
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("invalid rank guild id: {raw_id}"))?;
+            if config.enabled {
+                configured.push((guild_id, config.clone()));
+            }
+        }
+        if self.guild_id != 0 && !self.guilds.contains_key(&self.guild_id.to_string()) {
+            configured.push((self.guild_id, self.legacy_guild_config()));
+        }
+        configured.sort_by_key(|(guild_id, _)| *guild_id);
+        configured.dedup_by_key(|(guild_id, _)| *guild_id);
+        Ok(configured)
+    }
+
+    pub fn legacy_guild_id(&self) -> u64 {
+        self.guild_id
+    }
+
+    pub fn max_level(&self) -> u8 {
+        self.legacy_guild_config().max_level()
+    }
+
+    pub fn level_to_display(&self, level: u8) -> anyhow::Result<(&str, u8)> {
+        if self.stars_per_rank == 0 || level == 0 || level > self.max_level() {
+            anyhow::bail!("level {level} is out of bounds");
+        }
+        let rank_index = (level - 1) / self.stars_per_rank;
+        let stars = (level - 1) % self.stars_per_rank + 1;
+        let rank = self
+            .ranks
+            .get(rank_index as usize)
+            .ok_or_else(|| anyhow::anyhow!("rank index {rank_index} is out of bounds"))?;
+        Ok((rank, stars))
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let configured = self.configured_guilds()?;
+        if configured.is_empty() {
+            anyhow::bail!("rank must configure at least one guild when enabled");
+        }
+        for (guild_id, config) in configured {
+            config.validate(guild_id)?;
+        }
+        Ok(())
     }
 }
 
@@ -453,4 +648,174 @@ pub struct LoggingConfig {
     pub webhook_url: String,
     #[serde(default)]
     pub control_channel_id: u64,
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn valid_config() -> Config {
+        serde_yaml::from_str(
+            r#"
+bot:
+  token: test-token
+  application_id: 1
+permissions:
+  owner_id: 1
+tts:
+  provider: msedge
+  msedge: []
+"#,
+        )
+        .expect("test config must parse")
+    }
+
+    #[test]
+    fn valid_minimal_config_passes_validation() {
+        valid_config().validate().expect("valid config must pass");
+    }
+
+    #[test]
+    fn rejects_unknown_tts_provider() {
+        let mut config = valid_config();
+        config.tts.provider = "msedeg".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_default_gender() {
+        let mut config = valid_config();
+        config.tts.default_gender = "other".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_gtts_rate_and_pitch() {
+        let mut config = valid_config();
+        config.tts.provider = "gtts".to_string();
+        config.tts.rate = 1;
+        assert!(config.validate().is_err());
+
+        config.tts.rate = 0;
+        config.tts.pitch = 1;
+        assert!(config.validate().is_err());
+
+        config.tts.pitch = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_enabled_ai_provider() {
+        let mut config = valid_config();
+        config.ai.enabled = true;
+        config.ai.provider = "unknown".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_zero_rank_ids_and_zero_stars() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.ranks = vec!["RANK".to_string()];
+        assert!(config.validate().is_err());
+
+        config.rank.guild_id = 1;
+        config.rank.target_role_id = 2;
+        config.rank.leaderboard_channel_id = 3;
+        config.rank.stars_per_rank = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_rank_level_count_above_u8_capacity() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guild_id = 1;
+        config.rank.target_role_id = 2;
+        config.rank.leaderboard_channel_id = 3;
+        config.rank.stars_per_rank = 3;
+        config.rank.ranks = (0..86).map(|index| format!("RANK {index}")).collect();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_rank_math_never_panics_or_wraps() {
+        let rank = RankConfig {
+            enabled: true,
+            guild_id: 1,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: (0..100).map(|index| format!("RANK {index}")).collect(),
+            guilds: HashMap::new(),
+        };
+        assert_eq!(rank.max_level(), u8::MAX);
+
+        let zero_stars = RankConfig {
+            stars_per_rank: 0,
+            ranks: vec!["RANK".to_string()],
+            ..RankConfig::default()
+        };
+        assert!(zero_stars.level_to_display(1).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_enabled_voice_status() {
+        let mut config = valid_config();
+        config.voice_status.enabled = true;
+        config.voice_status.steps = vec!["ready".to_string()];
+        assert!(config.validate().is_err());
+
+        config.voice_status.channel_id = 1;
+        config.voice_status.interval_secs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn multi_guild_rank_config_is_isolated_and_explicit_map_overrides_legacy() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guild_id = 10;
+        config.rank.target_role_id = 100;
+        config.rank.leaderboard_channel_id = 101;
+        config.rank.ranks = vec!["LEGACY".to_string()];
+        config.rank.guilds.insert(
+            "10".to_string(),
+            GuildRankConfig {
+                target_role_id: 200,
+                leaderboard_channel_id: 201,
+                ranks: vec!["OVERRIDE".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        config.rank.guilds.insert(
+            "20".to_string(),
+            GuildRankConfig {
+                target_role_id: 300,
+                leaderboard_channel_id: 301,
+                ranks: vec!["SECOND".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        assert_eq!(config.rank.guild_config(10).unwrap().target_role_id, 200);
+        assert_eq!(config.rank.guild_config(20).unwrap().target_role_id, 300);
+        assert!(config.rank.guild_config(30).is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_multi_guild_rank_entry_is_rejected() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "20".to_string(),
+            GuildRankConfig {
+                target_role_id: 0,
+                leaderboard_channel_id: 301,
+                ranks: vec!["SECOND".to_string()],
+                ..GuildRankConfig::default()
+            },
+        );
+        assert!(config.validate().is_err());
+    }
 }

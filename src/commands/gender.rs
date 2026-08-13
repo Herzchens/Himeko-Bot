@@ -20,10 +20,9 @@ pub async fn gender(
     #[description = "Giọng đọc: male hoặc female"] voice: GenderChoice,
 ) -> Result<(), Error> {
     let config = ctx.data().config.read().await;
-    let state = &ctx.data().state;
-
     let level = UserLevel::of(ctx.author().id.get(), &config);
     if !level.can_use_tts() {
+        drop(config);
         ctx.send(
             CreateReply::default()
                 .content("❌ Bạn không có quyền dùng lệnh này.")
@@ -33,18 +32,32 @@ pub async fn gender(
         return Ok(());
     }
 
-    let guild_id = ctx.guild_id().unwrap_or(serenity::model::id::GuildId::new(1));
+    if config.tts.provider == "gtts" {
+        drop(config);
+        ctx.send(
+            CreateReply::default()
+                .content("ℹ️ gTTS không hỗ trợ lựa chọn giọng nam/nữ. Bot sẽ chỉ chọn ngôn ngữ vi/en cho provider này.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let guild_id = ctx
+        .guild_id()
+        .unwrap_or(serenity::model::id::GuildId::new(1));
     let user_id = ctx.author().id;
     let is_female = matches!(voice, GenderChoice::Female);
+    let name = config.tts.get_active_voice(is_female);
+    drop(config);
 
-    state.set_gender(user_id, is_female);
+    ctx.data().state.set_gender(user_id, is_female);
 
     let (emoji, voice_label) = if is_female {
         ("👩", "female")
     } else {
         ("👨", "male")
     };
-    let name = config.tts.get_active_voice(is_female);
 
     tracing::info!(
         guild = %guild_id,
@@ -55,8 +68,7 @@ pub async fn gender(
     ctx.send(
         CreateReply::default()
             .content(format!(
-                "🎙️ {} Đã chuyển sang giọng {} ({})",
-                emoji, voice_label, name
+                "🎙️ {emoji} Đã chuyển sang giọng {voice_label} ({name})"
             ))
             .ephemeral(true),
     )

@@ -2,58 +2,64 @@ use std::collections::HashMap;
 
 pub struct Normalizer {
     map: HashMap<String, String>,
+    punctuation_keys: Vec<String>,
 }
 
 impl Normalizer {
     pub fn from_config(abbreviations: &HashMap<String, String>) -> Self {
-        let map = abbreviations
+        let map: HashMap<String, String> = abbreviations
             .iter()
-            .map(|(k, v)| (k.to_lowercase(), v.clone()))
+            .map(|(key, value)| (key.to_lowercase(), value.clone()))
             .collect();
-        Self { map }
+        let mut punctuation_keys: Vec<String> = map
+            .keys()
+            .filter(|key| !key.chars().any(|c| c.is_alphanumeric()))
+            .cloned()
+            .collect();
+        punctuation_keys.sort_by_key(|key| std::cmp::Reverse(key.len()));
+        Self {
+            map,
+            punctuation_keys,
+        }
     }
 
     pub fn expand(&self, text: &str) -> String {
+        self.expand_for_language(text, false)
+    }
+
+    pub fn expand_for_language(&self, text: &str, is_english: bool) -> String {
+        let processed = self.expand_punctuation(text);
+        if is_english {
+            return processed.split_whitespace().collect::<Vec<_>>().join(" ");
+        }
+        self.expand_words(&processed)
+    }
+
+    fn expand_punctuation(&self, text: &str) -> String {
         let mut processed = text.to_string();
-
-        let mut punct_keys: Vec<&String> = self.map.keys()
-            .filter(|k| !k.chars().any(|c| c.is_alphanumeric()))
-            .collect();
-
-        punct_keys.sort_by_key(|a| std::cmp::Reverse(a.len()));
-
-        for k in punct_keys {
-            if let Some(v) = self.map.get(k) {
-                processed = processed.replace(k, &format!(" {} ", v));
+        for key in &self.punctuation_keys {
+            if let Some(value) = self.map.get(key) {
+                processed = processed.replace(key, &format!(" {value} "));
             }
         }
+        processed
+    }
 
-        processed.split_whitespace()
+    fn expand_words(&self, text: &str) -> String {
+        text.split_whitespace()
             .map(|word| {
                 let lower_full = word.to_lowercase();
                 if let Some(expanded) = self.map.get(&lower_full) {
-                    let result = if word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        capitalize(expanded)
-                    } else {
-                        expanded.clone()
-                    };
-                    return result;
+                    return preserve_capitalization(word, expanded);
                 }
 
                 let (prefix, core, suffix) = split_punctuation(word);
                 let lower = core.to_lowercase();
                 if let Some(expanded) = self.map.get(&lower) {
-                    let result = if core
-                        .chars()
-                        .next()
-                        .map(|c| c.is_uppercase())
-                        .unwrap_or(false)
-                    {
-                        capitalize(expanded)
-                    } else {
-                        expanded.clone()
-                    };
-                    format!("{}{}{}", prefix, result, suffix)
+                    format!(
+                        "{prefix}{}{suffix}",
+                        preserve_capitalization(core, expanded)
+                    )
                 } else {
                     word.to_string()
                 }
@@ -63,13 +69,25 @@ impl Normalizer {
     }
 }
 
+fn preserve_capitalization(original: &str, expanded: &str) -> String {
+    if original
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_uppercase())
+    {
+        capitalize(expanded)
+    } else {
+        expanded.to_string()
+    }
+}
+
 fn split_punctuation(word: &str) -> (&str, &str, &str) {
     let start = word
         .find(|c: char| c.is_alphanumeric())
         .unwrap_or(word.len());
     let end = word
         .rfind(|c: char| c.is_alphanumeric())
-        .map(|i| i + word[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1))
+        .map(|index| index + word[index..].chars().next().map_or(1, char::len_utf8))
         .unwrap_or(0);
 
     if start >= end {
@@ -78,11 +96,11 @@ fn split_punctuation(word: &str) -> (&str, &str, &str) {
     (&word[..start], &word[start..end], &word[end..])
 }
 
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
     match chars.next() {
         None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 
@@ -101,56 +119,75 @@ mod tests {
 
     #[test]
     fn expands_basic_abbreviation() {
-        let n = make_normalizer();
-        assert_eq!(n.expand("ko dc"), "không được");
+        let normalizer = make_normalizer();
+        assert_eq!(normalizer.expand("ko dc"), "không được");
     }
 
     #[test]
     fn expands_punctuation_abbreviation() {
-        let mut map = HashMap::new();
-        map.insert(":)))".to_string(), "mặt cười".to_string());
-        let n = Normalizer::from_config(&map);
-        assert_eq!(n.expand("hello :)))"), "hello mặt cười");
+        let map = HashMap::from([(":)))".to_string(), "mặt cười".to_string())]);
+        let normalizer = Normalizer::from_config(&map);
+        assert_eq!(normalizer.expand("hello :)))"), "hello mặt cười");
     }
 
     #[test]
     fn expands_punctuation_abbreviation_without_spaces() {
-        let mut map = HashMap::new();
-        map.insert(":)))".to_string(), "mặt cười".to_string());
-        let n = Normalizer::from_config(&map);
-        assert_eq!(n.expand("chứ:)))"), "chứ mặt cười");
+        let map = HashMap::from([(":)))".to_string(), "mặt cười".to_string())]);
+        let normalizer = Normalizer::from_config(&map);
+        assert_eq!(normalizer.expand("chứ:)))"), "chứ mặt cười");
     }
 
     #[test]
     fn preserves_capitalization() {
-        let n = make_normalizer();
-        assert_eq!(n.expand("Ko dc"), "Không được");
+        let normalizer = make_normalizer();
+        assert_eq!(normalizer.expand("Ko dc"), "Không được");
     }
 
     #[test]
     fn handles_punctuation() {
-        let n = make_normalizer();
-        assert_eq!(n.expand("ko!"), "không!");
+        let normalizer = make_normalizer();
+        assert_eq!(normalizer.expand("ko!"), "không!");
     }
 
     #[test]
     fn does_not_expand_within_words() {
-        let n = make_normalizer();
-        assert_eq!(n.expand("oko"), "oko");
+        let normalizer = make_normalizer();
+        assert_eq!(normalizer.expand("oko"), "oko");
     }
 
     #[test]
     fn handles_empty_input() {
-        let n = make_normalizer();
-        assert_eq!(n.expand(""), "");
+        let normalizer = make_normalizer();
+        assert_eq!(normalizer.expand(""), "");
     }
 
     #[test]
     fn mixed_abbreviations_and_normal_text() {
-        let n = make_normalizer();
+        let normalizer = make_normalizer();
         assert_eq!(
-            n.expand("mn ơi ko dc rồi"),
+            normalizer.expand("mn ơi ko dc rồi"),
             "mọi người ơi không được rồi"
+        );
+    }
+
+    #[test]
+    fn english_sentence_is_not_corrupted_by_vietnamese_single_letter_abbreviations() {
+        let map = HashMap::from([
+            ("a".to_string(), "anh".to_string()),
+            ("r".to_string(), "rồi".to_string()),
+            ("v".to_string(), "vậy".to_string()),
+            ("e".to_string(), "em".to_string()),
+            ("j".to_string(), "gì".to_string()),
+            (":)))".to_string(), "mặt cười".to_string()),
+        ]);
+        let normalizer = Normalizer::from_config(&map);
+        assert_eq!(
+            normalizer.expand_for_language("I have a car and press V", true),
+            "I have a car and press V"
+        );
+        assert_eq!(
+            normalizer.expand_for_language("hello :)))", true),
+            "hello mặt cười"
         );
     }
 }

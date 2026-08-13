@@ -2,6 +2,7 @@ import os
 import io
 import sys
 import argparse
+import threading
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="turbo", help="VieNeu-TTS mode: standard | turbo | fast | remote | xpu")
@@ -56,6 +57,10 @@ app = FastAPI()
 custom_voice_cache = {}
 preset_voice_cache = {}
 preset_name_map = {}
+# VieNeu inference/model state is not assumed thread-safe. FastAPI runs this synchronous
+# endpoint in its worker threadpool, while this lock keeps model inference serialized.
+inference_lock = threading.Lock()
+
 
 def init_preset_cache():
     if tts is None:
@@ -72,7 +77,9 @@ def init_preset_cache():
     except Exception as e:
         print(f"Warning: Failed to cache preset voices: {e}", flush=True)
 
+
 init_preset_cache()
+
 
 class TtsRequest(BaseModel):
     text: str
@@ -80,6 +87,7 @@ class TtsRequest(BaseModel):
     speed: float = 1.0
     temperature: float = 0.3
     pitch: int = 0
+
 
 def load_custom_voice(voice_path: str):
     if voice_path not in custom_voice_cache:
@@ -92,6 +100,7 @@ def load_custom_voice(voice_path: str):
         ref_codes = tts.encode_reference(voice_path)
         custom_voice_cache[voice_path] = {"codes": ref_codes, "text": ref_text}
     return custom_voice_cache[voice_path]
+
 
 def get_voice_data(voice_name: str):
     if tts is None:
@@ -114,6 +123,7 @@ def get_voice_data(voice_name: str):
 
     return tts.get_preset_voice(voice_name)
 
+
 def change_speed(audio, speed: float):
     if speed == 1.0 or speed <= 0:
         return audio
@@ -121,65 +131,71 @@ def change_speed(audio, speed: float):
     new_indices = np.arange(0, len(audio), speed)
     return np.interp(new_indices, old_indices, audio).astype(np.float32)
 
-def apply_pitch(audio, pitch_pct: int):
-    if pitch_pct == 0:
-        return audio
-    factor = 1.0 + pitch_pct / 100.0
-    old_len = len(audio)
-    new_len = max(1, int(old_len / factor))
-    resampled = np.interp(
-        np.linspace(0, old_len - 1, new_len),
-        np.arange(old_len),
-        audio,
-    ).astype(np.float32)
-    return resampled
+
+@app.get("/healthz")
+def healthz():
+    if tts is None:
+        raise HTTPException(status_code=503, detail="VieNeu-TTS engine is not initialized.")
+    return {"status": "ok"}
+
 
 @app.post("/v1/tts")
-async def tts_endpoint(req: TtsRequest):
+def tts_endpoint(req: TtsRequest):
     import time
-    t_start = time.time()
+
     if tts is None:
-        raise HTTPException(status_code=500, detail="VieNeu-TTS engine is not initialized.")
+        raise HTTPException(status_code=503, detail="VieNeu-TTS engine is not initialized.")
+    if req.pitch != 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Pitch shifting is disabled because the previous resampling implementation also changed duration/speed. Use pitch=0.",
+        )
+
+    t_start = time.time()
     try:
-        t0 = time.time()
-        voice_data = get_voice_data(req.voice)
-        t_voice = time.time() - t0
-        
-        # If temperature is 0, fall back to default randomness (1.0)
-        temp = req.temperature if req.temperature > 1e-5 else 1.0
-        
-        t0 = time.time()
-        audio = tts.infer(req.text, voice=voice_data, temperature=temp)
-        t_infer = time.time() - t0
-        
-        t0 = time.time()
-        audio = change_speed(audio, req.speed)
-        t_speed = time.time() - t0
-        
-        t0 = time.time()
-        audio = apply_pitch(audio, req.pitch)
-        t_pitch = time.time() - t0
-        
-        t0 = time.time()
-        sample_rate = getattr(tts, "sample_rate", 24000)
-        out_buf = io.BytesIO()
-        # Convert float32 array (-1.0 to 1.0) to int16 array (-32768 to 32767) for native WAV writing
-        audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
-        with wave.open(out_buf, "wb") as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)   # 16-bit (2 bytes)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(audio_int16.tobytes())
-        wav_bytes = out_buf.getvalue()
-        t_wav = time.time() - t0
-        
+        with inference_lock:
+            t0 = time.time()
+            voice_data = get_voice_data(req.voice)
+            t_voice = time.time() - t0
+
+            # If temperature is 0, fall back to default randomness (1.0)
+            temp = req.temperature if req.temperature > 1e-5 else 1.0
+
+            t0 = time.time()
+            audio = tts.infer(req.text, voice=voice_data, temperature=temp)
+            t_infer = time.time() - t0
+
+            t0 = time.time()
+            audio = change_speed(audio, req.speed)
+            t_speed = time.time() - t0
+
+            t0 = time.time()
+            sample_rate = getattr(tts, "sample_rate", 24000)
+            out_buf = io.BytesIO()
+            # Convert float32 array (-1.0 to 1.0) to int16 array (-32768 to 32767) for native WAV writing
+            audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+            with wave.open(out_buf, "wb") as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)   # 16-bit (2 bytes)
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(audio_int16.tobytes())
+            wav_bytes = out_buf.getvalue()
+            t_wav = time.time() - t0
+
         t_total = time.time() - t_start
-        print(f"⏱️ TTS synthesis timing: text='{req.text}', voice_match={t_voice:.3f}s, infer={t_infer:.3f}s, speed={t_speed:.3f}s, pitch={t_pitch:.3f}s, wav_write={t_wav:.3f}s, total={t_total:.3f}s", flush=True)
-        
+        print(
+            f"⏱️ TTS synthesis timing: text_chars={len(req.text)}, voice_match={t_voice:.3f}s, "
+            f"infer={t_infer:.3f}s, speed={t_speed:.3f}s, wav_write={t_wav:.3f}s, total={t_total:.3f}s",
+            flush=True,
+        )
+
         return Response(content=wav_bytes, media_type="audio/wav")
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Error during synthesis: {e}", flush=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=args.port)

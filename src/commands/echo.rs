@@ -1,4 +1,6 @@
+use crate::permissions::UserLevel;
 use crate::Data;
+use poise::CreateReply;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
@@ -9,9 +11,22 @@ pub async fn echo(
     ctx: Context<'_>,
     #[description = "Nội dung tin nhắn muốn Bot nói"] message: String,
 ) -> Result<(), Error> {
+    let config = ctx.data().config.read().await;
+    let level = UserLevel::of(ctx.author().id.get(), &config);
+    drop(config);
+
+    if !level.can_echo() {
+        ctx.send(
+            CreateReply::default()
+                .content("❌ Bạn không có quyền dùng lệnh này.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
     ctx.defer_ephemeral().await?;
 
-    // Log user details and the echoed message to console
     tracing::info!(
         user = %ctx.author().name,
         user_id = %ctx.author().id.get(),
@@ -20,12 +35,10 @@ pub async fn echo(
         "Echo command executed"
     );
 
-    // Send message to the current channel under the Bot's account
     ctx.channel_id().say(ctx, &message).await?;
 
-    // Send ephemeral confirmation back to the caller
     ctx.send(
-        poise::CreateReply::default()
+        CreateReply::default()
             .content("✅ Đã gửi tin nhắn dưới tên Bot thành công!")
             .ephemeral(true),
     )

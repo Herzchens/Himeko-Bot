@@ -23,7 +23,11 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
 
     let before = std::time::Instant::now();
     let reply = ctx
-        .send(CreateReply::default().content("🏓 Đang đo...").ephemeral(true))
+        .send(
+            CreateReply::default()
+                .content("🏓 Đang đo...")
+                .ephemeral(true),
+        )
         .await?;
     let http_latency = before.elapsed();
 

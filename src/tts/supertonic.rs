@@ -1,62 +1,138 @@
+use super::local_process::{self, ManagedProcess};
 use super::TtsEngine;
 use crate::config::SupertonicConfig;
-use reqwest::Client;
+use reqwest::{Client, Url};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::Arc;
+use std::time::Duration;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const SYNTHESIS_TIMEOUT: Duration = Duration::from_secs(30);
+const LOCAL_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub struct SupertonicEngine {
     client: Client,
     config: SupertonicConfig,
+    _process: Option<Arc<ManagedProcess>>,
 }
 
-fn parse_port(server_url: &str) -> Option<u16> {
-    server_url
-        .split(':')
-        .next_back()
-        .and_then(|p| p.parse::<u16>().ok())
+fn is_loopback_host(host: &str) -> bool {
+    let normalized = host.trim_start_matches('[').trim_end_matches(']');
+    normalized.eq_ignore_ascii_case("localhost")
+        || normalized
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
-fn is_server_running(port: u16) -> bool {
-    std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
-}
-
-fn start_supertonic_server(port: u16) {
-    if is_server_running(port) {
-        tracing::info!(port, "Supertonic server is already running, skipping launch");
-        return;
+fn loopback_endpoint(server_url: &str) -> anyhow::Result<Option<(String, u16)>> {
+    let url = Url::parse(server_url).map_err(|error| {
+        anyhow::anyhow!("invalid Supertonic server_url '{server_url}': {error}")
+    })?;
+    let Some(host) = url.host_str() else {
+        anyhow::bail!("Supertonic server_url must include a host");
+    };
+    if !is_loopback_host(host) {
+        return Ok(None);
     }
+    let port = url.port_or_known_default().ok_or_else(|| {
+        anyhow::anyhow!("Supertonic loopback server_url must include a usable port")
+    })?;
+    let connect_host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    Ok(Some((connect_host, port)))
+}
 
-    tracing::info!(port, "Starting Supertonic server...");
-    let result = std::process::Command::new("supertonic")
-        .args(["serve", "--port", &port.to_string()])
+fn local_server_running(host: &str, port: u16) -> bool {
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .into_iter()
+        .any(|address| TcpStream::connect_timeout(&address, LOCAL_PROBE_TIMEOUT).is_ok())
+}
+
+fn spawn_supertonic(port: u16) -> anyhow::Result<std::process::Child> {
+    tracing::info!(port, "starting managed Supertonic server");
+    std::process::Command::new("supertonic")
+        .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
-
-    match result {
-        Ok(_) => {
-            tracing::info!(port, "Supertonic server spawned successfully");
-        }
-        Err(e) => {
-            tracing::error!(
-                "Failed to start Supertonic server: {}. Please ensure supertonic CLI is installed and in your PATH.",
-                e
-            );
-        }
-    }
+        .spawn()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to start Supertonic server; ensure the supertonic CLI is installed: {error}"
+            )
+        })
 }
 
 impl SupertonicEngine {
     pub fn new(config: SupertonicConfig) -> Self {
-        if config.autostart {
-            if let Some(port) = parse_port(&config.server_url) {
-                start_supertonic_server(port);
-            } else {
-                tracing::warn!(url = %config.server_url, "Could not parse port from server_url, skipping automatic Supertonic launch");
+        let process = if config.autostart {
+            match loopback_endpoint(&config.server_url) {
+                Ok(Some((host, port))) => {
+                    let key = format!("supertonic:{port}");
+                    let signature = "serve";
+                    match local_process::existing(&key, signature) {
+                        Ok(Some(existing)) => {
+                            tracing::info!(
+                                port,
+                                pid = ?existing.pid(),
+                                "reusing managed Supertonic process across engine reload"
+                            );
+                            Some(existing)
+                        }
+                        Ok(None) if local_server_running(&host, port) => {
+                            tracing::info!(
+                                port,
+                                "using already-running external Supertonic server"
+                            );
+                            None
+                        }
+                        Ok(None) => match local_process::spawn_managed(key, signature, || {
+                            spawn_supertonic(port)
+                        }) {
+                            Ok(process) => Some(process),
+                            Err(error) => {
+                                tracing::error!(%error, "failed to autostart Supertonic");
+                                None
+                            }
+                        },
+                        Err(error) => {
+                            tracing::error!(%error, "cannot reuse managed Supertonic process");
+                            None
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        url = %config.server_url,
+                        "Supertonic autostart ignored for non-loopback server_url; using remote server as configured"
+                    );
+                    None
+                }
+                Err(error) => {
+                    tracing::error!(%error, "invalid Supertonic autostart configuration");
+                    None
+                }
             }
-        }
+        } else {
+            None
+        };
+
+        let client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "failed to configure Supertonic HTTP client; using default client");
+                Client::new()
+            });
 
         Self {
-            client: Client::new(),
+            client,
             config,
+            _process: process,
         }
     }
 
@@ -65,8 +141,7 @@ impl SupertonicEngine {
             let lower = voice.to_lowercase();
             let is_male = lower.contains("nam")
                 || lower.contains("guy")
-                || lower.contains("male")
-                    && !lower.contains("female");
+                || lower.contains("male") && !lower.contains("female");
             if is_male {
                 &self.config.voice_male
             } else {
@@ -109,42 +184,88 @@ impl TtsEngine for SupertonicEngine {
     async fn synthesize(&self, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
         let url = format!("{}/v1/tts", self.config.server_url.trim_end_matches('/'));
         let payload = self.build_payload(text, voice);
-        let timeout = std::time::Duration::from_secs(5);
         let max_attempts = 2;
 
         for attempt in 1..=max_attempts {
-            match self.client.post(&url).json(&payload).timeout(timeout).send().await {
-                Ok(response) if response.status().is_success() => {
-                    match response.bytes().await {
-                        Ok(bytes) => {
-                            tracing::debug!(
-                                text_len = text.len(),
-                                audio_len = bytes.len(),
-                                "Supertonic synthesis complete"
-                            );
-                            return Ok(bytes.to_vec());
-                        }
-                        Err(e) if attempt < max_attempts => {
-                            tracing::warn!("Supertonic read failed (attempt {attempt}/{max_attempts}): {e}");
-                        }
-                        Err(e) => anyhow::bail!("Supertonic failed to read bytes: {e}"),
+            match self
+                .client
+                .post(&url)
+                .json(&payload)
+                .timeout(SYNTHESIS_TIMEOUT)
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => match response.bytes().await {
+                    Ok(bytes) if !bytes.is_empty() => {
+                        tracing::debug!(
+                            text_chars = text.chars().count(),
+                            audio_len = bytes.len(),
+                            "Supertonic synthesis complete"
+                        );
+                        return Ok(bytes.to_vec());
                     }
-                }
+                    Ok(_) if attempt < max_attempts => {
+                        tracing::warn!(
+                            "Supertonic returned empty audio (attempt {attempt}/{max_attempts})"
+                        );
+                    }
+                    Ok(_) => anyhow::bail!("Supertonic returned empty audio"),
+                    Err(error) if attempt < max_attempts => {
+                        tracing::warn!(
+                            "Supertonic read failed (attempt {attempt}/{max_attempts}): {error}"
+                        );
+                    }
+                    Err(error) => anyhow::bail!("Supertonic failed to read bytes: {error}"),
+                },
                 Ok(response) => {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
                     if attempt >= max_attempts {
                         anyhow::bail!("Supertonic returned {status}: {body}");
                     }
-                    tracing::warn!("Supertonic status error (attempt {attempt}/{max_attempts}): {status}");
+                    tracing::warn!(
+                        "Supertonic status error (attempt {attempt}/{max_attempts}): {status}"
+                    );
                 }
-                Err(e) if attempt < max_attempts => {
-                    tracing::warn!("Supertonic request failed (attempt {attempt}/{max_attempts}): {e}");
+                Err(error) if attempt < max_attempts => {
+                    tracing::warn!(
+                        "Supertonic request failed (attempt {attempt}/{max_attempts}): {error}"
+                    );
                 }
-                Err(e) => anyhow::bail!("Supertonic request failed: {e}"),
+                Err(error) => anyhow::bail!("Supertonic request failed: {error}"),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        anyhow::bail!("Supertonic: unreachable")
+        anyhow::bail!("Supertonic exhausted synthesis attempts")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autostart_only_targets_loopback_url() {
+        assert_eq!(
+            loopback_endpoint("http://127.0.0.1:7788").unwrap(),
+            Some(("127.0.0.1".to_string(), 7788))
+        );
+        assert_eq!(
+            loopback_endpoint("http://127.42.0.9:7788").unwrap(),
+            Some(("127.42.0.9".to_string(), 7788))
+        );
+        assert_eq!(
+            loopback_endpoint("http://localhost:7788/v1").unwrap(),
+            Some(("localhost".to_string(), 7788))
+        );
+        assert_eq!(
+            loopback_endpoint("http://[::1]:7788").unwrap(),
+            Some(("::1".to_string(), 7788))
+        );
+        assert_eq!(
+            loopback_endpoint("https://tts.example.com:7788").unwrap(),
+            None
+        );
+        assert_eq!(loopback_endpoint("http://192.168.1.5:7788").unwrap(), None);
     }
 }

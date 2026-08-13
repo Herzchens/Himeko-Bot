@@ -14,7 +14,7 @@ use std::sync::Arc;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
-fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
+async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
     match config.tts.provider.as_str() {
         "gtts" => {
             tracing::info!("using gTTS engine");
@@ -25,7 +25,9 @@ fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
                 tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
                 Ok(Arc::new(SupertonicEngine::new(st_cfg)))
             }
-            None => Err("Config thiếu section [tts.supertonic] khi provider = \"supertonic\"".to_string()),
+            None => Err(
+                "Config thiếu section [tts.supertonic] khi provider = \"supertonic\"".to_string(),
+            ),
         },
         "openai" => match config.tts.get_openai_config() {
             Some(oa_cfg) => {
@@ -37,14 +39,20 @@ fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
         "vieneu" => match config.tts.get_vieneu_config() {
             Some(vn_cfg) => {
                 tracing::info!(server = %vn_cfg.server_url, "using VieNeu-TTS engine");
-                Ok(Arc::new(VieneuEngine::new(vn_cfg)))
+                VieneuEngine::new(vn_cfg)
+                    .await
+                    .map(|engine| Arc::new(engine) as Arc<dyn TtsEngine>)
+                    .map_err(|error| format!("VieNeu-TTS initialization failed: {error}"))
             }
             None => Err("Config thiếu section [tts.vieneu] khi provider = \"vieneu\"".to_string()),
         },
-        _ => {
+        "msedge" => {
             tracing::info!("using MsEdge engine");
             Ok(Arc::new(MsEdgeEngine::new(config.tts.clone())))
         }
+        other => Err(format!(
+            "Unsupported TTS provider after validation: {other}"
+        )),
     }
 }
 
@@ -66,12 +74,14 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     match Config::load("config.yml") {
-        Ok(new_config) => match create_engine(&new_config) {
+        Ok(new_config) => match create_engine(&new_config).await {
             Ok(tts_engine) => {
                 let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));
+                let default_female = new_config.tts.default_gender == "female";
                 *ctx.data().config.write().await = Arc::new(new_config);
                 *ctx.data().normalizer.write().await = normalizer;
                 *ctx.data().tts_engine.write().await = tts_engine;
+                ctx.data().state.set_default_female(default_female);
 
                 tracing::info!("Config reloaded by {}", ctx.author().name);
                 ctx.send(
@@ -84,7 +94,7 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
             Err(err_msg) => {
                 ctx.send(
                     CreateReply::default()
-                        .content(format!("❌ {}", err_msg))
+                        .content(format!("❌ {err_msg}"))
                         .ephemeral(true),
                 )
                 .await?;
@@ -93,7 +103,7 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
         Err(e) => {
             ctx.send(
                 CreateReply::default()
-                    .content(format!("❌ Lỗi khi đọc config: {}", e))
+                    .content(format!("❌ Lỗi khi đọc config: {e}"))
                     .ephemeral(true),
             )
             .await?;

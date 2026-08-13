@@ -22,12 +22,24 @@ impl UserLevel {
         self >= Self::Allowed
     }
 
+    pub fn can_use_ai(self) -> bool {
+        self >= Self::Allowed
+    }
+
+    pub fn can_echo(self) -> bool {
+        self >= Self::Allowed
+    }
+
     pub fn can_join(self) -> bool {
         self >= Self::Allowed
     }
 
     pub fn can_preempt(self) -> bool {
         self == Self::Owner
+    }
+
+    pub fn can_control_session(self, requester_id: u64, session_owner_id: u64) -> bool {
+        self.can_preempt() || (self.can_join() && requester_id == session_owner_id)
     }
 }
 
@@ -78,31 +90,38 @@ mod tests {
 
     #[test]
     fn owner_has_full_access() {
-        let config = test_config();
-        let level = UserLevel::of(100, &config);
+        let level = UserLevel::of(100, &test_config());
         assert_eq!(level, UserLevel::Owner);
         assert!(level.can_use_tts());
+        assert!(level.can_use_ai());
+        assert!(level.can_echo());
         assert!(level.can_join());
         assert!(level.can_preempt());
+        assert!(level.can_control_session(100, 200));
     }
 
     #[test]
-    fn allowed_user_has_limited_access() {
-        let config = test_config();
-        let level = UserLevel::of(200, &config);
+    fn allowed_user_has_limited_access_and_controls_only_own_session() {
+        let level = UserLevel::of(200, &test_config());
         assert_eq!(level, UserLevel::Allowed);
         assert!(level.can_use_tts());
+        assert!(level.can_use_ai());
+        assert!(level.can_echo());
         assert!(level.can_join());
         assert!(!level.can_preempt());
+        assert!(level.can_control_session(200, 200));
+        assert!(!level.can_control_session(200, 300));
     }
 
     #[test]
     fn unknown_user_has_no_access() {
-        let config = test_config();
-        let level = UserLevel::of(999, &config);
+        let level = UserLevel::of(999, &test_config());
         assert_eq!(level, UserLevel::Unknown);
         assert!(!level.can_use_tts());
+        assert!(!level.can_use_ai());
+        assert!(!level.can_echo());
         assert!(!level.can_join());
         assert!(!level.can_preempt());
+        assert!(!level.can_control_session(999, 999));
     }
 }

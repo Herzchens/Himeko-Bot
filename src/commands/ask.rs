@@ -1,3 +1,4 @@
+use crate::permissions::UserLevel;
 use crate::Data;
 use poise::CreateReply;
 
@@ -11,7 +12,20 @@ pub async fn ask(
     #[description = "Câu hỏi của bạn"] question: String,
 ) -> Result<(), Error> {
     let config = ctx.data().config.read().await;
+    let level = UserLevel::of(ctx.author().id.get(), &config);
+    if !level.can_use_ai() {
+        drop(config);
+        ctx.send(
+            CreateReply::default()
+                .content("❌ Bạn không có quyền dùng AI.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
     if !config.ai.enabled {
+        drop(config);
         ctx.send(
             CreateReply::default()
                 .content("❌ Tính năng AI chưa được cấu hình (chưa có API Key).")
@@ -31,7 +45,9 @@ pub async fn ask(
     if api_key.is_empty() {
         ctx.send(
             CreateReply::default()
-                .content(format!("❌ API Key cho provider '{:?}' chưa được cấu hình.", provider))
+                .content(format!(
+                    "❌ API Key cho provider '{provider:?}' chưa được cấu hình."
+                ))
                 .ephemeral(true),
         )
         .await?;
@@ -40,11 +56,18 @@ pub async fn ask(
 
     ctx.defer().await?;
 
-    let ai_result = crate::ai::ask_ai(provider, &api_key, &model, &question, &custom_answers, use_search).await;
+    let ai_result = crate::ai::ask_ai(
+        provider,
+        &api_key,
+        &model,
+        &question,
+        &custom_answers,
+        use_search,
+    )
+    .await;
 
     match ai_result {
         Ok(answer) => {
-
             if answer.len() > 2000 {
                 let chunks = answer.chars().collect::<Vec<char>>();
                 for chunk in chunks.chunks(1900) {
@@ -55,10 +78,10 @@ pub async fn ask(
                 ctx.send(CreateReply::default().content(answer)).await?;
             }
         }
-        Err(e) => {
+        Err(error) => {
             ctx.send(
                 CreateReply::default()
-                    .content(format!("❌ Lỗi khi gọi AI: {}", e))
+                    .content(format!("❌ Lỗi khi gọi AI: {error}"))
                     .ephemeral(true),
             )
             .await?;
