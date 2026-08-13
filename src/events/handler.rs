@@ -258,37 +258,24 @@ async fn handle_owner_dm(
         let parts: Vec<&str> = content.split_whitespace().collect();
         if parts.len() >= 3 {
             if let Ok(idx) = parts[1].parse::<usize>() {
-                if (1..=10).contains(&idx) {
-                    let msg_id_opt = {
-                        if let Ok(guard) = data.state.recent_messages.lock() {
-                            guard[idx - 1]
-                        } else {
-                            None
+                if let Some(reference) = data.state.recent_message(idx) {
+                    let reply_text = parts[2..].join(" ");
+                    let chan = reference.channel_id;
+                    let msg_ref = serenity::all::CreateMessage::new()
+                        .content(&reply_text)
+                        .reference_message((chan, reference.message_id));
+                    match chan.send_message(&ctx.http, msg_ref).await {
+                        Ok(_) => {
+                            let _ = msg.react(ctx, '✅').await;
+                            tracing::info!(channel = %chan, message = %reply_text, reply_to = %reference.message_id, "Sent reply via {}", via);
                         }
-                    };
-                    if let Some(msg_id) = msg_id_opt {
-                        let reply_text = parts[2..].join(" ");
-                        if active_chan_id == 0 {
-                            let _ = msg.reply(ctx, "❌ Chưa chọn kênh chat. Vui lòng dùng lệnh `/channel <ID>` trước.").await;
-                            return;
+                        Err(e) => {
+                            let _ = msg
+                                .reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {e}"))
+                                .await;
                         }
-                        let chan = serenity::all::ChannelId::new(active_chan_id);
-                        let msg_ref = serenity::all::CreateMessage::new()
-                            .content(&reply_text)
-                            .reference_message((chan, msg_id));
-                        match chan.send_message(&ctx.http, msg_ref).await {
-                            Ok(_) => {
-                                let _ = msg.react(ctx, '✅').await;
-                                tracing::info!(channel = active_chan_id, message = %reply_text, reply_to = %msg_id, "Sent reply via {}", via);
-                            }
-                            Err(e) => {
-                                let _ = msg
-                                    .reply(ctx, format!("❌ Gửi tin nhắn trả lời thất bại: {e}"))
-                                    .await;
-                            }
-                        }
-                        return;
                     }
+                    return;
                 }
             }
         }
@@ -356,17 +343,7 @@ pub async fn handle_message(
         .active_console_channel
         .load(std::sync::atomic::Ordering::SeqCst);
     if active_chan != 0 && msg.channel_id.get() == active_chan {
-        let idx = {
-            let counter = data
-                .state
-                .message_counter
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let idx = counter % 10;
-            if let Ok(mut guard) = data.state.recent_messages.lock() {
-                guard[idx] = Some(msg.id);
-            }
-            idx
-        };
+        let idx = data.state.record_recent_message(msg.channel_id, msg.id);
         println!("[{}] {}: {}", idx + 1, msg.author.name, msg.content);
         tracing::info!(target: "himeko_bot::console", "[{}] {}: {}", idx + 1, msg.author.name, msg.content);
     }
@@ -430,11 +407,20 @@ pub async fn handle_message(
             return None;
         }
 
-        let logical_chunks =
-            crate::tts::chunking::split_soft_chars(&processed, config.tts.max_chars);
-        if logical_chunks.is_empty() {
-            return None;
-        }
+        let processed_graphemes =
+            match crate::tts::validate_admission_limit(&processed, config.tts.max_chars) {
+                Ok(graphemes) => graphemes,
+                Err(error) => {
+                    tracing::warn!(
+                        guild = %guild_id,
+                        user = %msg.author.id,
+                        sequence,
+                        error = %error,
+                        "TTS message rejected by configured admission limit"
+                    );
+                    return None;
+                }
+            };
 
         let is_female = data.state.is_female(msg.author.id);
         let voice = select_voice(&config, is_english, is_female);
@@ -442,35 +428,30 @@ pub async fn handle_message(
         let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
 
         let start_time = std::time::Instant::now();
-        let mut audio_chunks = Vec::new();
-        for chunk in &logical_chunks {
-            match tts_engine.synthesize_chunks(chunk, &voice).await {
-                Ok(chunks)
-                    if !chunks.is_empty() && chunks.iter().all(|bytes| !bytes.is_empty()) =>
-                {
-                    audio_chunks.extend(chunks);
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        guild = %guild_id,
-                        user = %msg.author.id,
-                        sequence,
-                        "TTS engine returned empty audio chunks"
-                    );
-                    return None;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        guild = %guild_id,
-                        user = %msg.author.id,
-                        sequence,
-                        error = %error,
-                        "TTS synthesis failed"
-                    );
-                    return None;
-                }
+        let audio_chunks = match tts_engine.synthesize_chunks(&processed, &voice).await {
+            Ok(chunks) if !chunks.is_empty() && chunks.iter().all(|bytes| !bytes.is_empty()) => {
+                chunks
             }
-        }
+            Ok(_) => {
+                tracing::warn!(
+                    guild = %guild_id,
+                    user = %msg.author.id,
+                    sequence,
+                    "TTS engine returned empty audio chunks"
+                );
+                return None;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    guild = %guild_id,
+                    user = %msg.author.id,
+                    sequence,
+                    error = %error,
+                    "TTS synthesis failed"
+                );
+                return None;
+            }
+        };
         drop(synthesis_permit);
 
         if !data.state.is_current_session(guild_id, session.generation) {
@@ -490,7 +471,7 @@ pub async fn handle_message(
             user = %msg.author.id,
             provider = %config.tts.provider,
             chars = processed.chars().count(),
-            logical_chunks = logical_chunks.len(),
+            graphemes = processed_graphemes,
             audio_chunks = audio_chunks.len(),
             sequence,
             voice = %log_voice,

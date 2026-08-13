@@ -1,9 +1,15 @@
 use dashmap::{mapref::entry::Entry, DashMap};
-use serenity::model::id::{ChannelId, GuildId, UserId};
+use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Weak,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecentConsoleMessage {
+    pub channel_id: ChannelId,
+    pub message_id: MessageId,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceSession {
@@ -20,8 +26,8 @@ pub struct BotState {
     next_generation: Arc<AtomicU64>,
     default_female: Arc<AtomicBool>,
     pub active_console_channel: Arc<AtomicU64>,
-    pub recent_messages: Arc<std::sync::Mutex<[Option<serenity::all::MessageId>; 10]>>,
-    pub message_counter: Arc<AtomicUsize>,
+    recent_messages: Arc<std::sync::Mutex<[Option<RecentConsoleMessage>; 10]>>,
+    message_counter: Arc<AtomicUsize>,
 }
 
 impl Default for BotState {
@@ -42,6 +48,30 @@ impl BotState {
             recent_messages: Arc::new(std::sync::Mutex::new([None; 10])),
             message_counter: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub fn record_recent_message(&self, channel_id: ChannelId, message_id: MessageId) -> usize {
+        let counter = self.message_counter.fetch_add(1, Ordering::SeqCst);
+        let index = counter % 10;
+        let mut recent = self
+            .recent_messages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        recent[index] = Some(RecentConsoleMessage {
+            channel_id,
+            message_id,
+        });
+        index
+    }
+
+    pub fn recent_message(&self, one_based_index: usize) -> Option<RecentConsoleMessage> {
+        let index = one_based_index.checked_sub(1)?;
+        if index >= 10 {
+            return None;
+        }
+        self.recent_messages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)[index]
     }
 
     pub fn get_session(&self, guild_id: GuildId) -> Option<VoiceSession> {
@@ -129,6 +159,22 @@ impl BotState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_console_reply_keeps_original_channel_with_message_id() {
+        let state = BotState::default();
+        state.active_console_channel.store(100, Ordering::SeqCst);
+        let slot = state.record_recent_message(ChannelId::new(100), MessageId::new(500));
+        assert_eq!(slot, 0);
+
+        state.active_console_channel.store(200, Ordering::SeqCst);
+        let reference = state
+            .recent_message(1)
+            .expect("recent message reference must remain available");
+        assert_eq!(reference.channel_id, ChannelId::new(100));
+        assert_eq!(reference.message_id, MessageId::new(500));
+        assert_eq!(state.active_console_channel.load(Ordering::SeqCst), 200);
+    }
 
     #[test]
     fn configured_default_gender_is_used_until_user_overrides_it() {

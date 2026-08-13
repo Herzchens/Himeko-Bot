@@ -23,7 +23,10 @@ async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
         "supertonic" => match config.tts.get_supertonic_config() {
             Some(st_cfg) => {
                 tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
-                Ok(Arc::new(SupertonicEngine::new(st_cfg)))
+                SupertonicEngine::new(st_cfg)
+                    .await
+                    .map(|engine| Arc::new(engine) as Arc<dyn TtsEngine>)
+                    .map_err(|error| format!("Supertonic initialization failed: {error}"))
             }
             None => Err(
                 "Config thiếu section [tts.supertonic] khi provider = \"supertonic\"".to_string(),

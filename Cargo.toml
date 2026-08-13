@@ -16,7 +16,7 @@ songbird  = { version = "0.6", default-features = false, features = ["driver", "
 symphonia = { version = "0.5.5", features = ["mp3", "wav"] }
 
 # TTS
-msedge-tts = { version = "0.4.0", default-features = false, features = ["tokio-runtime"] }
+msedge-tts = { path = "vendor/msedge-tts", default-features = false, features = ["tokio-runtime"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -31,6 +31,7 @@ dashmap = "6"
 
 # Text processing
 regex = "1.11"
+unicode-segmentation = "=1.13.2"
 
 # Logging
 tracing            = "0.1"

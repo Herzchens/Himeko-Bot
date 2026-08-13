@@ -158,27 +158,28 @@ impl TtsScheduler {
         })
     }
 
-    fn lane_for_generation(&self, guild_id: GuildId, generation: u64) -> Arc<GuildTtsLane> {
+    fn lane_for_generation(&self, guild_id: GuildId, generation: u64) -> Option<Arc<GuildTtsLane>> {
         match self.lanes.entry(guild_id) {
             Entry::Occupied(entry) if entry.get().generation == generation => {
-                Arc::clone(entry.get())
+                Some(Arc::clone(entry.get()))
             }
+            Entry::Occupied(entry) if entry.get().generation > generation => None,
             Entry::Occupied(mut entry) => {
                 entry.get().cancel();
                 let lane = self.new_lane(generation);
                 entry.insert(Arc::clone(&lane));
-                lane
+                Some(lane)
             }
             Entry::Vacant(entry) => {
                 let lane = self.new_lane(generation);
                 entry.insert(Arc::clone(&lane));
-                lane
+                Some(lane)
             }
         }
     }
 
     pub fn try_admit(&self, guild_id: GuildId, generation: u64) -> Option<TtsTicket> {
-        let lane = self.lane_for_generation(guild_id, generation);
+        let lane = self.lane_for_generation(guild_id, generation)?;
         if lane.cancelled.load(Ordering::Acquire) {
             return None;
         }
@@ -439,6 +440,22 @@ mod tests {
         assert_eq!(semaphore.available_permits(), 1);
         guard.release();
         assert_eq!(semaphore.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_replace_newer_lane() {
+        let scheduler = TtsScheduler::with_limits(limits(4, 2, 2, 2));
+        let guild = GuildId::new(1);
+        let current = scheduler
+            .try_admit(guild, 20)
+            .expect("current generation must be admitted");
+
+        let stale = scheduler.try_admit(guild, 10);
+        assert!(stale.is_none(), "stale generation must be rejected");
+        assert!(
+            current.acquire_synthesis(&scheduler).await.is_some(),
+            "a stale admission attempt must not cancel the current lane"
+        );
     }
 
     #[tokio::test]

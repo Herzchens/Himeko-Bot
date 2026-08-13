@@ -1473,6 +1473,7 @@ dependencies = [
  "tokio-cron-scheduler",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
  "urlencoding",
 ]
 
@@ -2442,8 +2443,6 @@ dependencies = [
 [[package]]
 name = "msedge-tts"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5ee3d00bfd237fac2dcd03050c073d60769c9d1f2718545854374f1aa4d6d5b"
 dependencies = [
  "async-tungstenite",
  "chrono",

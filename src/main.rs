@@ -101,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::anyhow!("tts.supertonic section required when provider = \"supertonic\"")
             })?;
             tracing::info!(server = %st_cfg.server_url, "using Supertonic engine");
-            Arc::new(SupertonicEngine::new(st_cfg))
+            Arc::new(SupertonicEngine::new(st_cfg).await?)
         }
         "openai" => {
             let oa_cfg = config.tts.get_openai_config().ok_or_else(|| {
@@ -207,35 +207,21 @@ async fn main() -> anyhow::Result<()> {
                                 let parts: Vec<&str> = line.split_whitespace().collect();
                                 if parts.len() >= 3 {
                                     if let Ok(idx) = parts[1].parse::<usize>() {
-                                        if (1..=10).contains(&idx) {
-                                            let msg_id_opt = {
-                                                if let Ok(guard) = state_clone.recent_messages.lock() {
-                                                    guard[idx - 1]
-                                                } else {
-                                                    None
+                                        if let Some(reference) = state_clone.recent_message(idx) {
+                                            let reply_text = parts[2..].join(" ");
+                                            let chan = reference.channel_id;
+                                            let msg_ref = serenity::all::CreateMessage::new()
+                                                .content(&reply_text)
+                                                .reference_message((chan, reference.message_id));
+                                            match chan.send_message(&http_console, msg_ref).await {
+                                                Ok(_) => {
+                                                    tracing::info!(channel = %chan, message = %reply_text, reply_to = %reference.message_id, "Sent reply from console");
                                                 }
-                                            };
-                                            if let Some(msg_id) = msg_id_opt {
-                                                let reply_text = parts[2..].join(" ");
-                                                let active_channel_id = state_clone.active_console_channel.load(std::sync::atomic::Ordering::SeqCst);
-                                                if active_channel_id == 0 {
-                                                    tracing::warn!("No active console channel selected");
-                                                    continue;
+                                                Err(e) => {
+                                                    tracing::error!(error = %e, channel = %chan, "Failed to send reply from console");
                                                 }
-                                                let chan = serenity::all::ChannelId::new(active_channel_id);
-                                                let msg_ref = serenity::all::CreateMessage::new()
-                                                    .content(&reply_text)
-                                                    .reference_message((chan, msg_id));
-                                                match chan.send_message(&http_console, msg_ref).await {
-                                                    Ok(_) => {
-                                                        tracing::info!(channel = active_channel_id, message = %reply_text, reply_to = %msg_id, "Sent reply from console");
-                                                    }
-                                                    Err(e) => {
-                                                        tracing::error!(error = %e, "Failed to send reply from console");
-                                                    }
-                                                }
-                                                continue;
                                             }
+                                            continue;
                                         }
                                     }
                                 }

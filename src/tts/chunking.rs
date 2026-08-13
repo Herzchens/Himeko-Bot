@@ -1,3 +1,5 @@
+use unicode_segmentation::UnicodeSegmentation;
+
 pub const GTTS_MAX_CHARS: usize = 100;
 pub const EDGE_ESCAPED_CHUNK_BYTES: usize = 4096;
 
@@ -7,50 +9,25 @@ pub fn escape_xml(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub fn split_soft_chars(text: &str, max_chars: usize) -> Vec<String> {
-    let mut remaining = text.trim();
-    if remaining.is_empty() {
-        return Vec::new();
-    }
-    if max_chars == 0 || remaining.chars().count() <= max_chars {
-        return vec![remaining.to_string()];
+fn grapheme_hard_end(text: &str, max_chars: usize) -> usize {
+    if text.is_empty() || max_chars == 0 {
+        return text.len();
     }
 
-    let mut chunks = Vec::new();
-    while remaining.chars().count() > max_chars {
-        let hard_end = remaining
-            .char_indices()
-            .nth(max_chars)
-            .map(|(index, _)| index)
-            .unwrap_or(remaining.len());
-        let prefix = &remaining[..hard_end];
-        let split_at = prefix
-            .rfind(|c: char| c.is_whitespace())
-            .filter(|index| *index > 0)
-            .or_else(|| {
-                remaining[hard_end..]
-                    .find(|c: char| c.is_whitespace())
-                    .map(|offset| hard_end + offset)
-            })
-            .unwrap_or(remaining.len());
-
-        if split_at >= remaining.len() {
-            chunks.push(remaining.to_string());
-            remaining = "";
+    let mut used_chars = 0usize;
+    let mut end = 0usize;
+    for grapheme in text.graphemes(true) {
+        let grapheme_chars = grapheme.chars().count();
+        if end != 0 && used_chars + grapheme_chars > max_chars {
             break;
         }
-
-        let chunk = remaining[..split_at].trim();
-        if !chunk.is_empty() {
-            chunks.push(chunk.to_string());
+        end += grapheme.len();
+        used_chars += grapheme_chars;
+        if used_chars >= max_chars {
+            break;
         }
-        remaining = remaining[split_at..].trim_start();
     }
-
-    if !remaining.is_empty() {
-        chunks.push(remaining.to_string());
-    }
-    chunks
+    end
 }
 
 pub fn split_strict_chars(text: &str, max_chars: usize) -> Vec<String> {
@@ -64,11 +41,7 @@ pub fn split_strict_chars(text: &str, max_chars: usize) -> Vec<String> {
 
     let mut chunks = Vec::new();
     while remaining.chars().count() > max_chars {
-        let hard_end = remaining
-            .char_indices()
-            .nth(max_chars)
-            .map(|(index, _)| index)
-            .unwrap_or(remaining.len());
+        let hard_end = grapheme_hard_end(remaining, max_chars);
         let prefix = &remaining[..hard_end];
         let split_at = prefix
             .rfind(|c: char| c.is_whitespace())
@@ -115,21 +88,21 @@ pub fn split_xml_bytes(text: &str, max_bytes: usize) -> Vec<String> {
         let mut last_whitespace = None;
         let mut split_at = None;
 
-        for (index, c) in remaining.char_indices() {
-            let cost = escaped_char_len(c);
+        for (index, grapheme) in remaining.grapheme_indices(true) {
+            let cost = escaped_xml_len(grapheme);
             if used + cost > max_bytes {
                 let candidate = last_whitespace
                     .filter(|position| *position > 0)
                     .unwrap_or(index);
                 split_at = Some(if candidate == 0 {
-                    index + c.len_utf8()
+                    index + grapheme.len()
                 } else {
                     candidate
                 });
                 break;
             }
             used += cost;
-            if c.is_whitespace() {
+            if grapheme.chars().all(char::is_whitespace) {
                 last_whitespace = Some(index);
             }
         }
@@ -163,19 +136,57 @@ mod tests {
     }
 
     #[test]
-    fn soft_limit_preserves_every_word_instead_of_truncating() {
-        let text = "Đây là một đoạn văn đang được đọc tiếp cho đến hết";
-        let chunks = split_soft_chars(text, 12);
+    fn strict_split_never_breaks_zwj_grapheme() {
+        let family = "👨‍👩‍👧‍👦";
+        let text = family.repeat(3);
+        let chunks = split_strict_chars(&text, 5);
         assert!(chunks.len() > 1);
-        assert_eq!(normalized_words(&chunks.join(" ")), normalized_words(text));
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| !chunk.starts_with('\u{200d}') && !chunk.ends_with('\u{200d}')),
+            "strict splitter broke a ZWJ grapheme: {chunks:?}"
+        );
+        assert_eq!(chunks.concat(), text);
     }
 
     #[test]
-    fn soft_limit_does_not_split_a_long_word() {
-        let text = "supercalifragilisticexpialidocious test";
-        let chunks = split_soft_chars(text, 5);
-        assert_eq!(chunks[0], "supercalifragilisticexpialidocious");
-        assert_eq!(normalized_words(&chunks.join(" ")), normalized_words(text));
+    fn strict_split_never_starts_chunk_with_combining_mark() {
+        let text = "e\u{301}".repeat(3);
+        let chunks = split_strict_chars(&text, 1);
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks.iter().all(|chunk| !chunk.starts_with('\u{301}')),
+            "strict splitter detached a combining mark: {chunks:?}"
+        );
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn xml_split_never_breaks_zwj_grapheme() {
+        let family = "👨‍👩‍👧‍👦";
+        let text = family.repeat(3);
+        let chunks = split_xml_bytes(&text, 12);
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| !chunk.starts_with('\u{200d}') && !chunk.ends_with('\u{200d}')),
+            "XML splitter broke a ZWJ grapheme: {chunks:?}"
+        );
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn xml_split_never_starts_chunk_with_combining_mark() {
+        let text = "e\u{301}".repeat(3);
+        let chunks = split_xml_bytes(&text, 1);
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks.iter().all(|chunk| !chunk.starts_with('\u{301}')),
+            "XML splitter detached a combining mark: {chunks:?}"
+        );
+        assert_eq!(chunks.concat(), text);
     }
 
     #[test]

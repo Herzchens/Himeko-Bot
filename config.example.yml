@@ -25,8 +25,9 @@ tts:
   # Cao độ giọng: 0 (bình thường), đơn vị Hz. gTTS yêu cầu 0.
   pitch: 0
 
-  # Mục tiêu kích thước chunk; bot không cắt bỏ phần vượt quá. 0 = không giới hạn ở tầng người dùng.
-  # Provider vẫn tự chia nhỏ theo giới hạn an toàn của dịch vụ (ví dụ gTTS).
+  # Giới hạn ký tự hiển thị (extended grapheme cluster) của một message sau filter/normalize.
+  # Vượt giới hạn thì reject nguyên message, không truncate. 0 = không giới hạn.
+  # Provider vẫn tự chia nhỏ input đã được chấp nhận theo giới hạn an toàn riêng (ví dụ gTTS/Edge).
   max_chars: 0
 
   # Định dạng audio (Không nên đổi nếu không hiểu rõ)
