@@ -18,6 +18,12 @@ fn shared_ai_client() -> &'static reqwest::Client {
     })
 }
 
+fn neutralize_discord_mentions(text: &str) -> String {
+    text.replace("<@", "<@\u{200b}")
+        .replace("@everyone", "@\u{200b}everyone")
+        .replace("@here", "@\u{200b}here")
+}
+
 pub async fn ask_ai(
     provider: crate::config::AiProvider,
     api_key: &str,
@@ -42,6 +48,33 @@ pub async fn ask_ai(
 
 #[allow(clippy::too_many_arguments)]
 async fn ask_ai_with_client(
+    client: &reqwest::Client,
+    provider: crate::config::AiProvider,
+    api_key: &str,
+    model: &str,
+    question: &str,
+    custom_answers: &std::collections::HashMap<String, String>,
+    use_search: bool,
+    gemini_base: &str,
+    groq_url: &str,
+) -> anyhow::Result<String> {
+    let answer = ask_ai_raw_with_client(
+        client,
+        provider,
+        api_key,
+        model,
+        question,
+        custom_answers,
+        use_search,
+        gemini_base,
+        groq_url,
+    )
+    .await?;
+    Ok(neutralize_discord_mentions(&answer))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ask_ai_raw_with_client(
     client: &reqwest::Client,
     provider: crate::config::AiProvider,
     api_key: &str,
@@ -147,11 +180,66 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     #[test]
     fn shared_client_is_reused_process_wide() {
         assert!(std::ptr::eq(shared_ai_client(), shared_ai_client()));
+    }
+
+    #[test]
+    fn mention_neutralizer_changes_only_discord_ping_tokens() {
+        let input = "@everyone @here <@123> <@!456> <@&789> mail@example.com <:wave:42>";
+        let safe = neutralize_discord_mentions(input);
+        assert_eq!(
+            safe,
+            "@\u{200b}everyone @\u{200b}here <@\u{200b}123> <@\u{200b}!456> <@\u{200b}&789> mail@example.com <:wave:42>"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_output_cannot_emit_discord_mentions() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let body =
+                    r#"{"choices":[{"message":{"content":"@everyone <@123> <@&456> @here"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let url = format!("http://{address}/chat/completions");
+        let answer = ask_ai_with_client(
+            &client,
+            crate::config::AiProvider::Groq,
+            "key",
+            "model",
+            "hello",
+            &HashMap::new(),
+            false,
+            "http://127.0.0.1:1/models",
+            &url,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            answer,
+            "@\u{200b}everyone <@\u{200b}123> <@\u{200b}&456> @\u{200b}here"
+        );
     }
 
     #[tokio::test]
