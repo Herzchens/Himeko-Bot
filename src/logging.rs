@@ -211,13 +211,22 @@ async fn flush(buffer: &mut String, client: &reqwest::Client, webhook_url: &str)
     }
 }
 
+fn webhook_payload(content: &str) -> serde_json::Value {
+    serde_json::json!({
+        "content": content,
+        "allowed_mentions": {
+            "parse": []
+        }
+    })
+}
+
 async fn send_to_webhook(client: &reqwest::Client, url: &str, content: &str) -> anyhow::Result<()> {
     if content.is_empty() {
         return Ok(());
     }
     let response = client
         .post(url)
-        .json(&serde_json::json!({ "content": content }))
+        .json(&webhook_payload(content))
         .send()
         .await?;
     if !response.status().is_success() {
@@ -239,6 +248,73 @@ mod tests {
         assert!(!chunks.is_empty());
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 37));
         assert_eq!(chunks.concat(), input);
+    }
+
+    #[test]
+    fn webhook_payload_suppresses_all_mentions() {
+        let payload = webhook_payload("console: <@123> @everyone <@&456>");
+        assert_eq!(payload["content"], "console: <@123> @everyone <@&456>");
+        assert_eq!(payload["allowed_mentions"]["parse"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn webhook_request_disables_mentions_for_logged_user_content() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let header_end = loop {
+                if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break index + 4;
+                }
+                let mut chunk = [0u8; 2048];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "connection closed before headers completed");
+                bytes.extend_from_slice(&chunk[..read]);
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .expect("request must include Content-Length");
+            while bytes.len() < header_end + content_length {
+                let mut chunk = [0u8; 2048];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "connection closed before body completed");
+                bytes.extend_from_slice(&chunk[..read]);
+            }
+            let body = serde_json::from_slice::<serde_json::Value>(
+                &bytes[header_end..header_end + content_length],
+            )
+            .expect("webhook request body must be JSON");
+            socket
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            body
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        send_to_webhook(
+            &client,
+            &format!("http://{address}/webhook"),
+            "console: <@123> @everyone",
+        )
+        .await
+        .unwrap();
+        let body = server.await.unwrap();
+        assert_eq!(body["content"], "console: <@123> @everyone");
+        assert_eq!(body["allowed_mentions"]["parse"], serde_json::json!([]));
     }
 
     #[tokio::test]
