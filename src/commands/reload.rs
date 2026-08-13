@@ -56,6 +56,10 @@ async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
     }
 }
 
+fn rank_reload_requires_restart(rank_enabled: bool, legacy_pending: bool) -> bool {
+    rank_enabled && legacy_pending
+}
+
 /// Tải lại file config và cập nhật bot
 #[poise::command(slash_command, guild_only)]
 pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
@@ -74,6 +78,21 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     match Config::load("config.yml") {
+        Ok(new_config)
+            if rank_reload_requires_restart(
+                new_config.rank.enabled,
+                ctx.data().rank_store.legacy_migration_pending(),
+            ) =>
+        {
+            ctx.send(
+                CreateReply::default()
+                    .content(
+                        "❌ Không thể bật Rank bằng /reload khi database.yml legacy đang chờ migrate. Hãy khởi động lại bot với cấu hình Rank đã bật để migration chạy an toàn.",
+                    )
+                    .ephemeral(true),
+            )
+            .await?;
+        }
         Ok(new_config) => match create_engine(&new_config).await {
             Ok(tts_engine) => {
                 let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));
@@ -111,4 +130,17 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod rank_reload_tests {
+    use super::rank_reload_requires_restart;
+
+    #[test]
+    fn legacy_pending_only_requires_restart_when_reload_enables_rank() {
+        assert!(rank_reload_requires_restart(true, true));
+        assert!(!rank_reload_requires_restart(false, true));
+        assert!(!rank_reload_requires_restart(true, false));
+        assert!(!rank_reload_requires_restart(false, false));
+    }
 }

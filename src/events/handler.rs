@@ -691,31 +691,66 @@ pub async fn event_handler(
             )
             .await;
         }
-        FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
-            let rank_enabled_here = {
+        FullEvent::GuildCreate { guild, .. } => {
+            let guild_id = guild.id;
+            let rank_config = {
                 let config = data.config.read().await;
-                config.rank.guild_config(guild_id.get()).is_some()
+                config.rank.guild_config(guild_id.get())
             };
-            if rank_enabled_here {
-                if let Err(error) = crate::rank::service::remove_departed_user(
+            let should_reconcile = data
+                .rank_store
+                .runtime_guild_needs_reconciliation(guild_id.get());
+            if let Some(rank_config) = rank_config.filter(|_| should_reconcile) {
+                let remote = crate::rank::service::SerenityRankRemote::new(
+                    ctx.http.as_ref(),
+                    ctx.cache.current_user().id,
+                );
+                match crate::rank::service::reconcile_guild(
                     &data.rank_store,
+                    &rank_config,
                     guild_id.get(),
-                    user.id.get(),
+                    &remote,
                 )
                 .await
                 {
-                    tracing::error!(
+                    Ok(report) => tracing::info!(
                         guild = %guild_id,
-                        user = %user.id,
+                        added = report.added,
+                        updated = report.updated,
+                        removed = report.removed,
+                        "guild rank reconciliation complete"
+                    ),
+                    Err(error) => tracing::error!(
+                        guild = %guild_id,
                         %error,
-                        "failed to remove departed user from guild rank database"
-                    );
+                        "guild rank reconciliation failed; scheduled rank work stays inactive"
+                    ),
                 }
             }
         }
+        FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
+            if let Err(error) = crate::rank::service::remove_departed_user(
+                &data.rank_store,
+                guild_id.get(),
+                user.id.get(),
+            )
+            .await
+            {
+                tracing::error!(
+                    guild = %guild_id,
+                    user = %user.id,
+                    %error,
+                    "failed to remove departed user from guild rank database"
+                );
+            }
+        }
         FullEvent::GuildDelete { incomplete, .. } => {
+            let guild_id = incomplete.id;
+            let rank_generation = data
+                .rank_store
+                .invalidate_runtime_guild_guarded(guild_id.get())
+                .await;
             if !incomplete.unavailable {
-                let guild_id = incomplete.id;
                 let old_session = data.state.get_session(guild_id);
                 if let Some(session) = old_session {
                     let queue_lock = data.state.get_queue_lock(guild_id);
@@ -744,7 +779,8 @@ pub async fn event_handler(
                         );
                     }
                 }
-                data.rank_store.clear_runtime_guild(guild_id.get());
+                data.rank_store
+                    .clear_runtime_guild(guild_id.get(), rank_generation);
                 tracing::info!(guild = %guild_id, "cleaned runtime state after permanent guild removal");
             }
         }

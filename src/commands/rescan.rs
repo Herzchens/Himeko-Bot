@@ -31,7 +31,7 @@ pub async fn rescan(ctx: Context<'_>) -> Result<(), Error> {
 
     ctx.defer().await?;
     let remote = service::SerenityRankRemote::new(ctx.http(), ctx.cache().current_user().id);
-    match service::rescan(
+    match service::reconcile_guild(
         &ctx.data().rank_store,
         &rank_config,
         guild_id.get(),
@@ -47,11 +47,15 @@ pub async fn rescan(ctx: Context<'_>) -> Result<(), Error> {
             .await?;
         }
         Err(error) => {
-            tracing::error!(guild = %guild_id, %error, "rank rescan failed; previous database state preserved");
+            tracing::error!(
+                guild = %guild_id,
+                %error,
+                "rank reconciliation failed; scheduled rank work remains inactive"
+            );
             ctx.send(
                 poise::CreateReply::default()
                     .content(format!(
-                        "❌ Quét thất bại, dữ liệu cũ được giữ nguyên: {error}"
+                        "❌ Đồng bộ Rank chưa hoàn tất; tác vụ Rank định kỳ sẽ tạm dừng cho tới khi đồng bộ thành công: {error}"
                     ))
                     .ephemeral(true),
             )

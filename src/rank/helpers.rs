@@ -1,6 +1,7 @@
 use crate::config::GuildRankConfig;
 use crate::Data;
 use serenity::all::{GuildId, UserId};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -21,10 +22,11 @@ pub fn extract_mentions(text: &str) -> Vec<UserId> {
     static MENTION: OnceLock<regex::Regex> = OnceLock::new();
     let regex = MENTION
         .get_or_init(|| regex::Regex::new(r"<@!?(\d+)>").expect("mention regex must be valid"));
+    let mut seen = HashSet::new();
     regex
         .captures_iter(text)
         .filter_map(|capture| capture[1].parse::<u64>().ok())
-        .filter(|id| *id != 0)
+        .filter(|id| *id != 0 && seen.insert(*id))
         .map(UserId::new)
         .collect()
 }
@@ -106,9 +108,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mention_parser_rejects_zero_and_extracts_both_forms() {
+    fn mention_parser_rejects_zero_and_deduplicates_both_forms() {
         assert_eq!(
-            extract_mentions("<@42> <@!99> <@0>")
+            extract_mentions("<@42> <@!99> <@0> <@!42> <@99>")
                 .into_iter()
                 .map(UserId::get)
                 .collect::<Vec<_>>(),

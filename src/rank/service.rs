@@ -214,13 +214,15 @@ async fn rollback<R: RankRemote>(
     role_added: bool,
     role_removed: bool,
     nickname_changed: bool,
-) {
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
     if nickname_changed {
         if let Err(error) = remote
             .set_nickname(guild_id, member.user_id, member.nick.as_deref())
             .await
         {
             tracing::error!(%error, guild_id, user_id = member.user_id, "rank rollback failed to restore nickname");
+            failures.push(format!("restore nickname: {error}"));
         }
     }
     if role_added {
@@ -229,6 +231,7 @@ async fn rollback<R: RankRemote>(
             .await
         {
             tracing::error!(%error, guild_id, user_id = member.user_id, "rank rollback failed to remove added role");
+            failures.push(format!("remove added role: {error}"));
         }
     }
     if role_removed {
@@ -237,6 +240,24 @@ async fn rollback<R: RankRemote>(
             .await
         {
             tracing::error!(%error, guild_id, user_id = member.user_id, "rank rollback failed to restore removed role");
+            failures.push(format!("restore removed role: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(failures.join("; "))
+    }
+}
+
+fn error_after_rollback(
+    primary: anyhow::Error,
+    rollback_result: anyhow::Result<()>,
+) -> anyhow::Error {
+    match rollback_result {
+        Ok(()) => primary,
+        Err(rollback_error) => {
+            anyhow::anyhow!("{primary}; rollback failed: {rollback_error}; reconciliation required")
         }
     }
 }
@@ -254,6 +275,14 @@ fn recoverable_original_name(
         })
 }
 
+fn ensure_initialized(guild: &GuildRankData) -> anyhow::Result<()> {
+    if guild.initialized {
+        Ok(())
+    } else {
+        anyhow::bail!("rank guild is not initialized; run /rescan before mutating rank state")
+    }
+}
+
 pub async fn promote<R: RankRemote>(
     store: &RankStore,
     config: &GuildRankConfig,
@@ -262,28 +291,31 @@ pub async fn promote<R: RankRemote>(
     remote: &R,
 ) -> anyhow::Result<RankChange> {
     let _operation = store.operation_guard(guild_id).await;
+    let mut guild = store.guild_snapshot(guild_id).await;
+    ensure_initialized(&guild)?;
+
     let member = remote.fetch_member(guild_id, user_id).await?;
     if member.is_bot {
         return Ok(RankChange::SkippedBot);
     }
-
-    let mut guild = store.guild_snapshot(guild_id).await;
     let key = user_id.to_string();
     let previous = guild.users.get(&key).cloned();
     let old_level = previous.as_ref().map(|user| user.level).unwrap_or(0);
     let max_level = config.max_level();
-    if old_level >= max_level {
+    if old_level > max_level {
+        anyhow::bail!(
+            "stored rank level {old_level} is above configured maximum {max_level}; restore the rank configuration or remove the invalid rank"
+        );
+    }
+    if old_level == max_level {
         return Ok(RankChange::AlreadyMaximum { level: old_level });
     }
 
     let new_level = old_level + 1;
-    let old_expected = (old_level > 0)
-        .then(|| logic::format_nickname(config, old_level))
-        .transpose()?;
     let mut expected = logic::format_nickname(config, new_level)?;
-    if let Some(old_expected) = old_expected {
-        if member.display_name().starts_with(&old_expected) {
-            expected.push_str(&member.display_name()[old_expected.len()..]);
+    if old_level > 0 {
+        if let Some(suffix) = logic::managed_suffix(config, member.display_name(), old_level) {
+            expected.push_str(suffix);
         }
     }
 
@@ -300,7 +332,7 @@ pub async fn promote<R: RankRemote>(
             .set_nickname(guild_id, user_id, Some(&expected))
             .await
         {
-            rollback(
+            let rollback_result = rollback(
                 remote,
                 guild_id,
                 &member,
@@ -310,7 +342,7 @@ pub async fn promote<R: RankRemote>(
                 false,
             )
             .await;
-            return Err(error);
+            return Err(error_after_rollback(error, rollback_result));
         }
     }
 
@@ -323,7 +355,7 @@ pub async fn promote<R: RankRemote>(
     );
 
     if let Err(error) = store.replace_guild(guild_id, guild).await {
-        rollback(
+        let rollback_result = rollback(
             remote,
             guild_id,
             &member,
@@ -333,7 +365,7 @@ pub async fn promote<R: RankRemote>(
             nickname_changed,
         )
         .await;
-        return Err(error);
+        return Err(error_after_rollback(error, rollback_result));
     }
 
     Ok(RankChange::Changed {
@@ -352,12 +384,13 @@ pub async fn demote<R: RankRemote>(
     remote: &R,
 ) -> anyhow::Result<RankChange> {
     let _operation = store.operation_guard(guild_id).await;
+    let mut guild = store.guild_snapshot(guild_id).await;
+    ensure_initialized(&guild)?;
+
     let member = remote.fetch_member(guild_id, user_id).await?;
     if member.is_bot {
         return Ok(RankChange::SkippedBot);
     }
-
-    let mut guild = store.guild_snapshot(guild_id).await;
     let key = user_id.to_string();
     let Some(previous) = guild.users.get(&key).cloned() else {
         return Ok(RankChange::NotRanked);
@@ -378,10 +411,9 @@ pub async fn demote<R: RankRemote>(
     let desired_nick = if removing {
         previous.original_name.clone()
     } else {
-        let old_expected = logic::format_nickname(config, previous.level)?;
         let mut new_expected = logic::format_nickname(config, new_level)?;
-        if member.display_name().starts_with(&old_expected) {
-            new_expected.push_str(&member.display_name()[old_expected.len()..]);
+        if let Some(suffix) = logic::managed_suffix(config, member.display_name(), previous.level) {
+            new_expected.push_str(suffix);
         }
         Some(new_expected)
     };
@@ -391,7 +423,7 @@ pub async fn demote<R: RankRemote>(
             .set_nickname(guild_id, user_id, desired_nick.as_deref())
             .await
         {
-            rollback(
+            let rollback_result = rollback(
                 remote,
                 guild_id,
                 &member,
@@ -401,7 +433,7 @@ pub async fn demote<R: RankRemote>(
                 false,
             )
             .await;
-            return Err(error);
+            return Err(error_after_rollback(error, rollback_result));
         }
     }
 
@@ -412,7 +444,7 @@ pub async fn demote<R: RankRemote>(
     }
 
     if let Err(error) = store.replace_guild(guild_id, guild).await {
-        rollback(
+        let rollback_result = rollback(
             remote,
             guild_id,
             &member,
@@ -422,7 +454,7 @@ pub async fn demote<R: RankRemote>(
             nickname_changed,
         )
         .await;
-        return Err(error);
+        return Err(error_after_rollback(error, rollback_result));
     }
 
     Ok(RankChange::Changed {
@@ -441,12 +473,13 @@ pub async fn remove_rank<R: RankRemote>(
     remote: &R,
 ) -> anyhow::Result<RankChange> {
     let _operation = store.operation_guard(guild_id).await;
+    let mut guild = store.guild_snapshot(guild_id).await;
+    ensure_initialized(&guild)?;
+
     let member = remote.fetch_member(guild_id, user_id).await?;
     if member.is_bot {
         return Ok(RankChange::SkippedBot);
     }
-
-    let mut guild = store.guild_snapshot(guild_id).await;
     let key = user_id.to_string();
     let Some(previous) = guild.users.get(&key).cloned() else {
         return Ok(RankChange::NotRanked);
@@ -464,7 +497,7 @@ pub async fn remove_rank<R: RankRemote>(
             .set_nickname(guild_id, user_id, previous.original_name.as_deref())
             .await
         {
-            rollback(
+            let rollback_result = rollback(
                 remote,
                 guild_id,
                 &member,
@@ -474,13 +507,13 @@ pub async fn remove_rank<R: RankRemote>(
                 false,
             )
             .await;
-            return Err(error);
+            return Err(error_after_rollback(error, rollback_result));
         }
     }
 
     guild.users.remove(&key);
     if let Err(error) = store.replace_guild(guild_id, guild).await {
-        rollback(
+        let rollback_result = rollback(
             remote,
             guild_id,
             &member,
@@ -490,7 +523,7 @@ pub async fn remove_rank<R: RankRemote>(
             nickname_changed,
         )
         .await;
-        return Err(error);
+        return Err(error_after_rollback(error, rollback_result));
     }
 
     Ok(RankChange::Changed {
@@ -501,14 +534,36 @@ pub async fn remove_rank<R: RankRemote>(
     })
 }
 
-pub async fn rescan<R: RankRemote>(
+async fn rescan_inner<R: RankRemote>(
     store: &RankStore,
     config: &GuildRankConfig,
     guild_id: u64,
     remote: &R,
+    expected_generation: Option<u64>,
 ) -> anyhow::Result<RescanReport> {
     let _operation = store.operation_guard(guild_id).await;
+    if expected_generation
+        .is_some_and(|generation| !store.runtime_guild_generation_is_current(guild_id, generation))
+    {
+        anyhow::bail!("rank rescan invalidated by guild lifecycle change");
+    }
     let previous = store.guild_snapshot(guild_id).await;
+    let previous_initialized = previous.initialized;
+    let max_level = config.max_level();
+    let invalid_trusted_user = if previous_initialized {
+        previous
+            .users
+            .iter()
+            .find(|(_, user)| user.level > max_level)
+    } else {
+        None
+    };
+    if let Some((user_id, user)) = invalid_trusted_user {
+        anyhow::bail!(
+            "rank database user {user_id} has level {} above configured maximum {max_level} for guild {guild_id}; restore the rank configuration or remove the invalid row before reconciliation",
+            user.level
+        );
+    }
     let mut scanned = GuildRankData {
         initialized: false,
         settings: previous.settings.clone(),
@@ -525,18 +580,57 @@ pub async fn rescan<R: RankRemote>(
             if member.is_bot {
                 continue;
             }
-            if let Some(level) = logic::parse_nickname(config, member.display_name()) {
-                let original_name = previous
-                    .users
-                    .get(&member.user_id.to_string())
-                    .and_then(|user| user.original_name.clone());
-                scanned.users.insert(
-                    member.user_id.to_string(),
-                    RankUserData {
-                        level,
-                        original_name,
-                    },
-                );
+
+            let key = member.user_id.to_string();
+            let previous_user = previous.users.get(&key);
+            let has_target_role = member.roles.contains(&config.target_role_id);
+            let parsed_level = logic::parse_nickname(config, member.display_name());
+
+            if previous_initialized {
+                match (previous_user, has_target_role, parsed_level) {
+                    (Some(existing), _, _) => {
+                        scanned.users.insert(key, existing.clone());
+                    }
+                    (None, true, Some(level)) => {
+                        scanned.users.insert(
+                            key,
+                            RankUserData {
+                                level,
+                                original_name: None,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            match (previous_user, has_target_role, parsed_level) {
+                (Some(existing), true, Some(level)) if level != existing.level => {}
+                (Some(existing), true, parsed_level) => {
+                    let original_name = if parsed_level.is_none() {
+                        recoverable_original_name(config, member, None)
+                    } else {
+                        None
+                    };
+                    scanned.users.insert(
+                        key,
+                        RankUserData {
+                            level: existing.level,
+                            original_name,
+                        },
+                    );
+                }
+                (None, true, Some(level)) => {
+                    scanned.users.insert(
+                        key,
+                        RankUserData {
+                            level,
+                            original_name: None,
+                        },
+                    );
+                }
+                _ => {}
             }
         }
         after = members.last().map(|member| member.user_id);
@@ -575,16 +669,68 @@ pub async fn rescan<R: RankRemote>(
     })
 }
 
-pub async fn initialize_if_needed<R: RankRemote>(
+pub async fn reconcile_guild<R: RankRemote>(
     store: &RankStore,
     config: &GuildRankConfig,
     guild_id: u64,
     remote: &R,
-) -> anyhow::Result<Option<RescanReport>> {
-    if store.guild_snapshot(guild_id).await.initialized {
-        return Ok(None);
+) -> anyhow::Result<RescanReport> {
+    let generation = store
+        .try_begin_runtime_guild_reconciliation(guild_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!("rank reconciliation is already in progress for guild {guild_id}")
+        })?;
+    let result: anyhow::Result<RescanReport> = async {
+        let report = rescan_for_generation(store, config, guild_id, remote, generation).await?;
+        if !store.runtime_guild_generation_is_current(guild_id, generation) {
+            anyhow::bail!("rank reconciliation invalidated by guild lifecycle change");
+        }
+
+        let state = store.guild_snapshot(guild_id).await;
+        for user_id in state.users.keys() {
+            if !store.runtime_guild_generation_is_current(guild_id, generation) {
+                anyhow::bail!("rank reconciliation invalidated by guild lifecycle change");
+            }
+            let user_id = user_id.parse::<u64>().map_err(|error| {
+                anyhow::anyhow!("invalid rank user id {user_id} during reconciliation: {error}")
+            })?;
+            sync_member_nickname_for_generation(
+                store, config, guild_id, user_id, remote, generation,
+            )
+            .await?;
+        }
+
+        if !store.complete_runtime_guild_reconciliation(guild_id, generation) {
+            anyhow::bail!("rank reconciliation invalidated by guild lifecycle change");
+        }
+        Ok(report)
     }
-    rescan(store, config, guild_id, remote).await.map(Some)
+    .await;
+
+    if result.is_err() {
+        store.abort_runtime_guild_reconciliation(guild_id, generation);
+    }
+    result
+}
+
+#[cfg(test)]
+pub async fn rescan<R: RankRemote>(
+    store: &RankStore,
+    config: &GuildRankConfig,
+    guild_id: u64,
+    remote: &R,
+) -> anyhow::Result<RescanReport> {
+    rescan_inner(store, config, guild_id, remote, None).await
+}
+
+async fn rescan_for_generation<R: RankRemote>(
+    store: &RankStore,
+    config: &GuildRankConfig,
+    guild_id: u64,
+    remote: &R,
+    generation: u64,
+) -> anyhow::Result<RescanReport> {
+    rescan_inner(store, config, guild_id, remote, Some(generation)).await
 }
 
 pub async fn set_autorename(store: &RankStore, guild_id: u64, enabled: bool) -> anyhow::Result<()> {
@@ -608,16 +754,23 @@ pub async fn remove_departed_user(
     Ok(removed)
 }
 
-pub async fn sync_member_nickname<R: RankRemote>(
+async fn sync_member_nickname_inner<R: RankRemote>(
     store: &RankStore,
     config: &GuildRankConfig,
     guild_id: u64,
     user_id: u64,
     remote: &R,
+    expected_generation: Option<u64>,
 ) -> anyhow::Result<()> {
     let _operation = store.operation_guard(guild_id).await;
+    if expected_generation
+        .is_some_and(|generation| !store.runtime_guild_generation_is_current(guild_id, generation))
+    {
+        anyhow::bail!("rank projection invalidated by guild lifecycle change");
+    }
+
     let guild = store.guild_snapshot(guild_id).await;
-    if !guild.settings.autorename {
+    if !guild.initialized {
         return Ok(());
     }
     let Some(user) = guild.users.get(&user_id.to_string()) else {
@@ -627,7 +780,6 @@ pub async fn sync_member_nickname<R: RankRemote>(
         return Ok(());
     }
 
-    let expected = logic::format_nickname(config, user.level)?;
     let member = remote.fetch_member(guild_id, user_id).await?;
     if member.is_bot {
         return Ok(());
@@ -637,7 +789,13 @@ pub async fn sync_member_nickname<R: RankRemote>(
             .add_role(guild_id, user_id, config.target_role_id)
             .await?;
     }
-    if member.can_rename && !member.display_name().starts_with(&expected) {
+    if !guild.settings.autorename {
+        return Ok(());
+    }
+
+    let expected = logic::format_nickname(config, user.level)?;
+    let managed_level = logic::parse_nickname(config, member.display_name());
+    if member.can_rename && managed_level != Some(user.level) {
         remote
             .set_nickname(guild_id, user_id, Some(&expected))
             .await?;
@@ -645,7 +803,31 @@ pub async fn sync_member_nickname<R: RankRemote>(
     Ok(())
 }
 
+pub async fn sync_member_nickname<R: RankRemote>(
+    store: &RankStore,
+    config: &GuildRankConfig,
+    guild_id: u64,
+    user_id: u64,
+    remote: &R,
+) -> anyhow::Result<()> {
+    sync_member_nickname_inner(store, config, guild_id, user_id, remote, None).await
+}
+
+async fn sync_member_nickname_for_generation<R: RankRemote>(
+    store: &RankStore,
+    config: &GuildRankConfig,
+    guild_id: u64,
+    user_id: u64,
+    remote: &R,
+    generation: u64,
+) -> anyhow::Result<()> {
+    sync_member_nickname_inner(store, config, guild_id, user_id, remote, Some(generation)).await
+}
+
 pub fn leaderboard(state: &GuildRankData) -> Vec<(String, u8)> {
+    if !state.initialized {
+        return Vec::new();
+    }
     let mut entries = state
         .users
         .iter()
@@ -727,7 +909,11 @@ mod tests {
             guild_id: u64,
             user_id: u64,
         ) -> anyhow::Result<MemberSnapshot> {
-            let state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap();
+            if state.fail == Some("fetch_member") {
+                state.fail = None;
+                anyhow::bail!("injected fetch member failure");
+            }
             let mut snapshot = state
                 .members
                 .get(&(guild_id, user_id))
@@ -819,10 +1005,32 @@ mod tests {
         }
     }
 
+    async fn initialize_guild(store: &RankStore, guild_id: u64) {
+        let mut state = store.guild_snapshot(guild_id).await;
+        state.initialized = true;
+        store
+            .replace_guild(guild_id, state)
+            .await
+            .expect("test guild initialization must persist");
+    }
+
+    async fn initialized_store_with_removed_parent(name: &str, guild_id: u64) -> RankStore {
+        let directory = path(name);
+        std::fs::create_dir_all(&directory).expect("test parent directory must be created");
+        let database = directory.join("database.yml");
+        let store = RankStore::open(&database, 0).expect("test store must open");
+        initialize_guild(&store, guild_id).await;
+        std::fs::remove_file(&database).expect("test database must be removable");
+        std::fs::remove_dir(&directory).expect("test parent directory must be removable");
+        store
+    }
+
     #[tokio::test]
     async fn same_user_is_independent_between_guilds() {
         let file = path("multi-guild");
         let store = RankStore::open(&file, 0).unwrap();
+        initialize_guild(&store, 1).await;
+        initialize_guild(&store, 2).await;
         let remote = FakeRemote::default();
         remote.member(1, 42, Some("Alice-A"), &[]);
         remote.member(2, 42, Some("Alice-B"), &[]);
@@ -846,9 +1054,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rank_changes_preserve_only_boundary_valid_custom_suffixes() {
+        let file = path("suffix-boundary");
+        let store = RankStore::open(&file, 0).unwrap();
+        initialize_guild(&store, 1).await;
+        let remote = FakeRemote::default();
+
+        remote.member(1, 42, Some("Alice"), &[]);
+        promote(&store, &config(), 1, 42, &remote).await.unwrap();
+        remote.member(1, 42, Some("BRONZE 1 SAO | custom"), &[9]);
+        promote(&store, &config(), 1, 42, &remote).await.unwrap();
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("BRONZE 2 SAO | custom")
+        );
+
+        remote.member(1, 42, Some("BRONZE 2 SAOXYZ"), &[9]);
+        promote(&store, &config(), 1, 42, &remote).await.unwrap();
+        assert_eq!(remote.snapshot(1, 42).nick.as_deref(), Some("BRONZE 3 SAO"));
+
+        remote.member(1, 42, Some("BRONZE 3 SAO | keep"), &[9]);
+        demote(&store, &config(), 1, 42, &remote).await.unwrap();
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("BRONZE 2 SAO | keep")
+        );
+
+        remote.member(1, 42, Some("BRONZE 2 SAOGARBAGE"), &[9]);
+        demote(&store, &config(), 1, 42, &remote).await.unwrap();
+        assert_eq!(remote.snapshot(1, 42).nick.as_deref(), Some("BRONZE 1 SAO"));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
     async fn reaching_maximum_is_a_real_change_then_reports_maximum() {
         let file = path("max");
         let store = RankStore::open(&file, 0).unwrap();
+        initialize_guild(&store, 1).await;
         let remote = FakeRemote::default();
         remote.member(1, 42, Some("Alice"), &[]);
         for expected in 1..=6 {
@@ -868,6 +1110,7 @@ mod tests {
     async fn demote_to_zero_restores_original_and_removes_role() {
         let file = path("demote");
         let store = RankStore::open(&file, 0).unwrap();
+        initialize_guild(&store, 1).await;
         let remote = FakeRemote::default();
         remote.member(1, 42, Some("Alice"), &[]);
         promote(&store, &config(), 1, 42, &remote).await.unwrap();
@@ -881,8 +1124,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_failure_rolls_discord_side_effects_back() {
-        let missing_parent = path("missing-parent");
-        let store = RankStore::open(missing_parent.join("database.yml"), 0).unwrap();
+        let store = initialized_store_with_removed_parent("missing-parent", 1).await;
         let remote = FakeRemote::default();
         remote.member(1, 42, Some("Alice"), &[]);
         assert!(promote(&store, &config(), 1, 42, &remote).await.is_err());
@@ -893,15 +1135,678 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_failure_is_reported_as_reconciliation_required() {
+        let store = initialized_store_with_removed_parent("rollback-failure", 1).await;
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Alice"), &[]);
+        remote.fail_next("remove_role");
+
+        let error = promote(&store, &config(), 1, 42, &remote)
+            .await
+            .expect_err("persistence failure with failed compensation must surface");
+        assert!(
+            error.to_string().contains("reconciliation required"),
+            "rollback failure must be visible to the caller: {error}"
+        );
+        assert!(
+            remote.has_role(1, 42, 9),
+            "failed role rollback must leave observable drift for reconciliation"
+        );
+        assert_eq!(remote.snapshot(1, 42).nick.as_deref(), Some("Alice"));
+        assert!(store.guild_snapshot(1).await.users.is_empty());
+    }
+
+    #[tokio::test]
     async fn nickname_failure_rolls_new_role_back_and_never_persists() {
         let file = path("nick-fail");
         let store = RankStore::open(&file, 0).unwrap();
+        initialize_guild(&store, 1).await;
         let remote = FakeRemote::default();
         remote.member(1, 42, Some("Alice"), &[]);
         remote.fail_next("nickname");
         assert!(promote(&store, &config(), 1, 42, &remote).await.is_err());
         assert!(!remote.has_role(1, 42, 9));
         assert!(store.guild_snapshot(1).await.users.is_empty());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn provisional_level_above_current_config_is_removed_by_verification() {
+        let file = path("provisional-config-level-drift");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData::default();
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 7,
+                original_name: Some("Untrusted legacy value".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+
+        let report = rescan(&store, &config(), 1, &remote)
+            .await
+            .expect("provisional data must remain recoverable through verification");
+        assert_eq!(report.removed, 1);
+        let verified = store.guild_snapshot(1).await;
+        assert!(verified.initialized);
+        assert!(verified.users.is_empty());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn rescan_rejects_level_above_current_config_without_rewrite() {
+        let file = path("config-level-drift");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 7,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+
+        let error = rescan(&store, &config(), 1, &remote)
+            .await
+            .expect_err("out-of-range stored level must fail closed");
+        assert!(error.to_string().contains("above configured maximum"));
+        let unchanged = store.guild_snapshot(1).await;
+        assert!(unchanged.initialized);
+        assert_eq!(unchanged.users["42"].level, 7);
+        assert_eq!(
+            unchanged.users["42"].original_name.as_deref(),
+            Some("Alice")
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn promote_rejects_stored_level_above_current_config() {
+        let file = path("promote-config-drift");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 7,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Alice"), &[9]);
+
+        let error = promote(&store, &config(), 1, 42, &remote)
+            .await
+            .expect_err("out-of-range stored level must not look like a valid maximum");
+        assert!(error.to_string().contains("above configured maximum"));
+        assert_eq!(store.guild_snapshot(1).await.users["42"].level, 7);
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn uninitialized_rank_mutation_is_rejected_without_side_effects() {
+        let file = path("uninitialized-mutation");
+        let store = RankStore::open(&file, 0).unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Alice"), &[]);
+        remote.fail_next("fetch_member");
+
+        let error = promote(&store, &config(), 1, 42, &remote)
+            .await
+            .expect_err("uninitialized rank state must reject mutation");
+        assert!(error.to_string().contains("not initialized"));
+        assert!(!remote.has_role(1, 42, 9));
+        assert!(store.guild_snapshot(1).await.users.is_empty());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn nickname_without_target_role_never_creates_rank_state() {
+        let file = path("nickname-only-import");
+        let store = RankStore::open(&file, 0).unwrap();
+        let remote = FakeRemote::default();
+        remote.state.lock().unwrap().pages.insert(
+            1,
+            vec![vec![MemberSnapshot {
+                user_id: 42,
+                username: "Alice".into(),
+                nick: Some("SILVER 3 SAO".into()),
+                roles: vec![],
+                is_bot: false,
+                can_rename: true,
+            }]],
+        );
+
+        let report = rescan(&store, &config(), 1, &remote).await.unwrap();
+        assert_eq!(report.added, 0);
+        let state = store.guild_snapshot(1).await;
+        assert!(state.initialized);
+        assert!(state.users.is_empty());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn initialized_rescan_never_learns_a_new_level_from_nickname() {
+        let file = path("authoritative-rescan");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+
+        let remote = FakeRemote::default();
+        remote.state.lock().unwrap().pages.insert(
+            1,
+            vec![vec![MemberSnapshot {
+                user_id: 42,
+                username: "Alice".into(),
+                nick: Some("SILVER 3 SAO".into()),
+                roles: vec![9],
+                is_bot: false,
+                can_rename: true,
+            }]],
+        );
+
+        let report = rescan(&store, &config(), 1, &remote).await.unwrap();
+        assert_eq!(report.updated, 0);
+        assert_eq!(store.guild_snapshot(1).await.users["42"].level, 2);
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn provisional_legacy_rows_require_matching_role_and_level() {
+        let file = path("legacy-verification");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData::default();
+        state.users.insert(
+            "7".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("possibly-stale".into()),
+            },
+        );
+        state.users.insert(
+            "8".into(),
+            RankUserData {
+                level: 3,
+                original_name: Some("possibly-stale".into()),
+            },
+        );
+        state.users.insert(
+            "9".into(),
+            RankUserData {
+                level: 1,
+                original_name: Some("possibly-stale".into()),
+            },
+        );
+        state.users.insert(
+            "10".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("possibly-stale".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+
+        let remote = FakeRemote::default();
+        remote.state.lock().unwrap().pages.insert(
+            1,
+            vec![vec![
+                MemberSnapshot {
+                    user_id: 7,
+                    username: "Seven".into(),
+                    nick: Some("BRONZE 2 SAO".into()),
+                    roles: vec![9],
+                    is_bot: false,
+                    can_rename: true,
+                },
+                MemberSnapshot {
+                    user_id: 8,
+                    username: "Eight".into(),
+                    nick: Some("BRONZE 2 SAO".into()),
+                    roles: vec![9],
+                    is_bot: false,
+                    can_rename: true,
+                },
+                MemberSnapshot {
+                    user_id: 9,
+                    username: "Nine".into(),
+                    nick: Some("BRONZE 1 SAO".into()),
+                    roles: vec![],
+                    is_bot: false,
+                    can_rename: true,
+                },
+                MemberSnapshot {
+                    user_id: 10,
+                    username: "Ten".into(),
+                    nick: Some("Custom nickname".into()),
+                    roles: vec![9],
+                    is_bot: false,
+                    can_rename: true,
+                },
+            ]],
+        );
+
+        let report = rescan(&store, &config(), 1, &remote).await.unwrap();
+        assert_eq!(report.removed, 2);
+        let state = store.guild_snapshot(1).await;
+        assert!(state.initialized);
+        assert_eq!(state.users.len(), 2);
+        assert_eq!(state.users["7"].level, 2);
+        assert_eq!(state.users["7"].original_name, None);
+        assert_eq!(state.users["10"].level, 2);
+        assert_eq!(
+            state.users["10"].original_name.as_deref(),
+            Some("Custom nickname")
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn parse_valid_custom_suffix_is_preserved_during_projection() {
+        let file = path("valid-managed-suffix");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("BRONZE 2 SAO | custom"), &[9]);
+
+        sync_member_nickname(&store, &config(), 1, 42, &remote)
+            .await
+            .unwrap();
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("BRONZE 2 SAO | custom")
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn malformed_rank_prefix_is_repaired_instead_of_preserved() {
+        let file = path("invalid-managed-prefix");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("BRONZE 2 SAOXYZ"), &[9]);
+
+        sync_member_nickname(&store, &config(), 1, 42, &remote)
+            .await
+            .unwrap();
+        assert_eq!(remote.snapshot(1, 42).nick.as_deref(), Some("BRONZE 2 SAO"));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn autorename_off_still_repairs_target_role_without_touching_nickname() {
+        let file = path("autorename-role-repair");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.settings.autorename = false;
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Free nickname"), &[]);
+
+        sync_member_nickname(&store, &config(), 1, 42, &remote)
+            .await
+            .unwrap();
+        assert!(remote.has_role(1, 42, 9));
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("Free nickname")
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn provisional_state_never_projects_roles_or_nicknames() {
+        let file = path("provisional-projection");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData::default();
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: None,
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Free nickname"), &[]);
+
+        sync_member_nickname(&store, &config(), 1, 42, &remote)
+            .await
+            .unwrap();
+        assert!(!remote.has_role(1, 42, 9));
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("Free nickname")
+        );
+        assert!(leaderboard(&store.guild_snapshot(1).await).is_empty());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn runtime_reconciliation_prunes_departed_users_and_marks_guild_active() {
+        let file = path("runtime-reconcile-success");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        state.users.insert(
+            "99".into(),
+            RankUserData {
+                level: 1,
+                original_name: Some("Departed".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+
+        let remote = FakeRemote::default();
+        remote.state.lock().unwrap().pages.insert(
+            1,
+            vec![vec![MemberSnapshot {
+                user_id: 42,
+                username: "Alice".into(),
+                nick: Some("Free nickname".into()),
+                roles: vec![],
+                is_bot: false,
+                can_rename: true,
+            }]],
+        );
+        remote.member(1, 42, Some("Free nickname"), &[]);
+
+        let report = reconcile_guild(&store, &config(), 1, &remote)
+            .await
+            .unwrap();
+        assert_eq!(report.removed, 1);
+        assert!(store.is_runtime_guild_active(1));
+        let state = store.guild_snapshot(1).await;
+        assert_eq!(state.users.len(), 1);
+        assert_eq!(state.users["42"].level, 2);
+        assert!(remote.has_role(1, 42, 9));
+        assert_eq!(remote.snapshot(1, 42).nick.as_deref(), Some("BRONZE 2 SAO"));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn rescan_rechecks_generation_after_acquiring_operation_lock() {
+        let file = path("runtime-rescan-generation-race");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state.clone()).await.unwrap();
+
+        let remote = FakeRemote::default();
+        let generation = store
+            .try_begin_runtime_guild_reconciliation(1)
+            .expect("fresh reconciliation must be admitted");
+        let operation = store.operation_guard(1).await;
+        let rank_config = config();
+        let mut stale_rescan = Box::pin(rescan_for_generation(
+            &store,
+            &rank_config,
+            1,
+            &remote,
+            generation,
+        ));
+
+        tokio::select! {
+            biased;
+            result = &mut stale_rescan => panic!("rescan bypassed the held operation lock: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        let invalidated = store.invalidate_runtime_guild_for_test(1);
+        assert_ne!(generation, invalidated);
+        remote.fail_next("list");
+        drop(operation);
+
+        let error = stale_rescan
+            .await
+            .expect_err("stale rescan must be rejected after acquiring the operation lock");
+        assert!(error.to_string().contains("invalidated"));
+        assert_eq!(store.guild_snapshot(1).await, state);
+
+        let list_error = rescan(&store, &rank_config, 1, &remote)
+            .await
+            .expect_err("stale rescan must not consume the injected list failure");
+        assert!(list_error.to_string().contains("injected list failure"));
+        assert_eq!(store.guild_snapshot(1).await, state);
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn projection_rechecks_generation_after_acquiring_operation_lock() {
+        let file = path("runtime-projection-generation-race");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+
+        let remote = FakeRemote::default();
+        remote.member(1, 42, Some("Free nickname"), &[]);
+        let generation = store
+            .try_begin_runtime_guild_reconciliation(1)
+            .expect("fresh reconciliation must be admitted");
+        let operation = store.operation_guard(1).await;
+        let rank_config = config();
+        let mut projection = Box::pin(sync_member_nickname_for_generation(
+            &store,
+            &rank_config,
+            1,
+            42,
+            &remote,
+            generation,
+        ));
+
+        tokio::select! {
+            biased;
+            result = &mut projection => panic!("projection bypassed the held operation lock: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        let invalidated = store.invalidate_runtime_guild_for_test(1);
+        assert_ne!(generation, invalidated);
+        drop(operation);
+
+        let error = projection
+            .await
+            .expect_err("stale projection must be rejected after acquiring the operation lock");
+        assert!(error.to_string().contains("invalidated"));
+        assert!(!remote.has_role(1, 42, 9));
+        assert_eq!(
+            remote.snapshot(1, 42).nick.as_deref(),
+            Some("Free nickname")
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn duplicate_reconciliation_is_rejected_before_remote_scan() {
+        let file = path("runtime-reconciliation-singleflight-service");
+        let store = RankStore::open(&file, 0).unwrap();
+        let generation = store
+            .try_begin_runtime_guild_reconciliation(1)
+            .expect("first reconciliation must be admitted");
+        let remote = FakeRemote::default();
+        remote.fail_next("list");
+
+        let error = reconcile_guild(&store, &config(), 1, &remote)
+            .await
+            .expect_err("duplicate reconciliation must be rejected");
+        assert!(error.to_string().contains("already in progress"));
+        assert!(store.runtime_guild_generation_is_current(1, generation));
+
+        store.abort_runtime_guild_reconciliation(1, generation);
+        let list_error = rescan(&store, &config(), 1, &remote)
+            .await
+            .expect_err("duplicate reconciliation must not consume the injected list failure");
+        assert!(list_error.to_string().contains("injected list failure"));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_projection_never_marks_guild_active() {
+        let file = path("runtime-projection-failure");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state).await.unwrap();
+
+        let remote = FakeRemote::default();
+        remote.state.lock().unwrap().pages.insert(
+            1,
+            vec![vec![MemberSnapshot {
+                user_id: 42,
+                username: "Alice".into(),
+                nick: Some("Free nickname".into()),
+                roles: vec![],
+                is_bot: false,
+                can_rename: true,
+            }]],
+        );
+        remote.member(1, 42, Some("Free nickname"), &[]);
+        remote.fail_next("add_role");
+
+        assert!(reconcile_guild(&store, &config(), 1, &remote)
+            .await
+            .is_err());
+        assert!(!store.is_runtime_guild_active(1));
+        assert_eq!(store.guild_snapshot(1).await.users["42"].level, 2);
+        assert!(!remote.has_role(1, 42, 9));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_invalidation_prevents_stale_reconciliation_activation() {
+        let file = path("runtime-lifecycle-race");
+        let store = RankStore::open(&file, 0).unwrap();
+        let generation = store
+            .try_begin_runtime_guild_reconciliation(1)
+            .expect("fresh reconciliation must be admitted");
+        store.invalidate_runtime_guild_for_test(1);
+        assert!(!store.runtime_guild_generation_is_current(1, generation));
+        assert!(!store.complete_runtime_guild_reconciliation(1, generation));
+        assert!(!store.is_runtime_guild_active(1));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_reconciliation_leaves_guild_inactive_and_database_unchanged() {
+        let file = path("runtime-reconcile-failure");
+        let store = RankStore::open(&file, 0).unwrap();
+        let mut state = GuildRankData {
+            initialized: true,
+            ..GuildRankData::default()
+        };
+        state.users.insert(
+            "42".into(),
+            RankUserData {
+                level: 2,
+                original_name: Some("Alice".into()),
+            },
+        );
+        store.replace_guild(1, state.clone()).await.unwrap();
+        let active_generation = store
+            .try_begin_runtime_guild_reconciliation(1)
+            .expect("fresh reconciliation must be admitted");
+        assert!(store.complete_runtime_guild_reconciliation(1, active_generation));
+        assert!(store.is_runtime_guild_active(1));
+
+        let remote = FakeRemote::default();
+        remote.fail_next("list");
+        assert!(reconcile_guild(&store, &config(), 1, &remote)
+            .await
+            .is_err());
+        assert!(!store.is_runtime_guild_active(1));
+        assert!(!store.runtime_guild_reconciliation_in_progress(1));
+        assert!(store.runtime_guild_needs_reconciliation(1));
+        assert_eq!(store.guild_snapshot(1).await, state);
         let _ = std::fs::remove_file(file);
     }
 
@@ -960,6 +1865,7 @@ mod tests {
         assert!(store.guild_snapshot(2).await.settings.autorename);
 
         let mut a = store.guild_snapshot(1).await;
+        a.initialized = true;
         a.users.insert(
             "1".into(),
             RankUserData {
@@ -969,6 +1875,7 @@ mod tests {
         );
         store.replace_guild(1, a).await.unwrap();
         let mut b = store.guild_snapshot(2).await;
+        b.initialized = true;
         b.users.insert(
             "2".into(),
             RankUserData {

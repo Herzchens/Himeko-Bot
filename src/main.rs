@@ -62,10 +62,16 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("config loaded — owner_id={}", config.permissions.owner_id);
 
-    let rank_store = Arc::new(rank::db::RankStore::open(
+    let rank_store = Arc::new(rank::db::RankStore::open_runtime(
         "database.yml",
         config.rank.legacy_guild_id(),
+        config.rank.enabled,
     )?);
+    if rank_store.legacy_migration_pending() {
+        tracing::warn!(
+            "rank is disabled and a valid legacy database was found; migration is deferred until restart with rank enabled"
+        );
+    }
 
     let default_female = config.tts.default_gender == "female";
     let state = BotState::new(default_female);
@@ -387,7 +393,7 @@ async fn main() -> anyhow::Result<()> {
                         ctx.cache.current_user().id,
                     );
                     for (guild_id, rank_config) in config_clone.rank.configured_guilds()? {
-                        match rank::service::initialize_if_needed(
+                        match rank::service::reconcile_guild(
                             &rank_store_setup,
                             &rank_config,
                             guild_id,
@@ -395,21 +401,17 @@ async fn main() -> anyhow::Result<()> {
                         )
                         .await
                         {
-                            Ok(Some(report)) => tracing::info!(
+                            Ok(report) => tracing::info!(
                                 guild_id,
                                 added = report.added,
                                 updated = report.updated,
                                 removed = report.removed,
-                                "first-run rank scan complete"
-                            ),
-                            Ok(None) => tracing::debug!(
-                                guild_id,
-                                "rank guild already initialized"
+                                "startup rank reconciliation complete"
                             ),
                             Err(error) => tracing::error!(
                                 guild_id,
                                 %error,
-                                "first-run rank scan failed; guild remains uninitialized"
+                                "startup rank reconciliation failed; scheduled rank work stays inactive"
                             ),
                         }
                     }
@@ -491,12 +493,27 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn monthly_channel_belongs_to_guild(
+    channel: &serenity::all::Channel,
+    expected_guild_id: u64,
+) -> bool {
+    matches!(
+        channel,
+        serenity::all::Channel::Guild(guild_channel)
+            if guild_channel.guild_id.get() == expected_guild_id
+    )
+}
+
 async fn run_monthly_ping(
     store: &rank::db::RankStore,
     rank_config: &config::RankConfig,
     http: &Arc<serenity::all::Http>,
 ) -> anyhow::Result<()> {
     for (guild_id, guild_config) in rank_config.configured_guilds()? {
+        if !store.is_runtime_guild_active(guild_id) {
+            tracing::debug!(guild_id, "skipping monthly rank work for inactive guild");
+            continue;
+        }
         let state = store.guild_snapshot(guild_id).await;
         let top3 = rank::service::leaderboard(&state)
             .into_iter()
@@ -524,6 +541,26 @@ async fn run_monthly_ping(
             .title("🎉 BẢNG VÀNG THÁNG NÀY 🎉")
             .description(lines.join("\n"));
         let channel_id = serenity::all::ChannelId::new(guild_config.leaderboard_channel_id);
+        let channel = match channel_id.to_channel(http).await {
+            Ok(channel) => channel,
+            Err(error) => {
+                tracing::error!(
+                    guild_id,
+                    channel_id = channel_id.get(),
+                    %error,
+                    "failed to resolve monthly leaderboard channel"
+                );
+                continue;
+            }
+        };
+        if !monthly_channel_belongs_to_guild(&channel, guild_id) {
+            tracing::error!(
+                guild_id,
+                channel_id = channel_id.get(),
+                "monthly leaderboard channel belongs to a different guild; refusing to send"
+            );
+            continue;
+        }
         if let Err(error) = channel_id
             .send_message(http, serenity::all::CreateMessage::new().embed(embed))
             .await
@@ -537,4 +574,22 @@ async fn run_monthly_ping(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod monthly_channel_boundary_tests {
+    use super::*;
+
+    fn guild_channel(guild_id: u64) -> serenity::all::Channel {
+        let mut channel = serenity::all::GuildChannel::default();
+        channel.guild_id = serenity::all::GuildId::new(guild_id);
+        serenity::all::Channel::Guild(channel)
+    }
+
+    #[test]
+    fn monthly_channel_accepts_only_the_configured_guild() {
+        let channel = guild_channel(10);
+        assert!(monthly_channel_belongs_to_guild(&channel, 10));
+        assert!(!monthly_channel_belongs_to_guild(&channel, 20));
+    }
 }

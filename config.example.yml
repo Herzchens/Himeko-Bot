@@ -122,8 +122,8 @@ rank:
 
   # Cấu hình legacy một server. Vẫn được hỗ trợ để database.yml cũ có thể migrate an toàn.
   guild_id: 123456789012345678
-  target_role_id: 123456789012345678
-  leaderboard_channel_id: 123456789012345678
+  target_role_id: 223456789012345678
+  leaderboard_channel_id: 323456789012345678
   stars_per_rank: 3
   ranks:
     - "CHÓ NÁT"

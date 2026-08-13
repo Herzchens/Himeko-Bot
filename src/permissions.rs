@@ -27,7 +27,7 @@ impl UserLevel {
     }
 
     pub fn can_echo(self) -> bool {
-        self >= Self::Allowed
+        self == Self::Owner
     }
 
     pub fn can_join(self) -> bool {
@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(level, UserLevel::Allowed);
         assert!(level.can_use_tts());
         assert!(level.can_use_ai());
-        assert!(level.can_echo());
+        assert!(!level.can_echo());
         assert!(level.can_join());
         assert!(!level.can_preempt());
         assert!(level.can_control_session(200, 200));

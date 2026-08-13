@@ -431,6 +431,7 @@ impl Config {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RankConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -449,6 +450,7 @@ pub struct RankConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GuildRankConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -514,6 +516,9 @@ impl GuildRankConfig {
         if self.target_role_id == 0 {
             anyhow::bail!("rank target_role_id must be set for guild {guild_id}");
         }
+        if self.target_role_id == guild_id {
+            anyhow::bail!("rank target_role_id for guild {guild_id} cannot be the @everyone role");
+        }
         if self.leaderboard_channel_id == 0 {
             anyhow::bail!("rank leaderboard_channel_id must be set for guild {guild_id}");
         }
@@ -533,6 +538,25 @@ impl GuildRankConfig {
                 "rank configuration for guild {guild_id} supports at most {} total levels",
                 u8::MAX
             );
+        }
+
+        let mut canonical_ranks = std::collections::HashSet::new();
+        for rank in &self.ranks {
+            if rank.is_empty() || rank.trim() != rank {
+                anyhow::bail!(
+                    "rank names for guild {guild_id} must be non-empty and have no surrounding whitespace"
+                );
+            }
+            let canonical = rank.to_uppercase();
+            if !canonical_ranks.insert(canonical) {
+                anyhow::bail!("rank names for guild {guild_id} must be unique ignoring case");
+            }
+            let longest_prefix = format!("{rank} {} SAO", self.stars_per_rank);
+            if longest_prefix.chars().count() > 32 {
+                anyhow::bail!(
+                    "rank nickname prefix for guild {guild_id} exceeds Discord's 32-character nickname limit"
+                );
+            }
         }
         Ok(())
     }
@@ -568,6 +592,12 @@ impl RankConfig {
             let guild_id = raw_id
                 .parse::<u64>()
                 .map_err(|_| anyhow::anyhow!("invalid rank guild id: {raw_id}"))?;
+            let canonical_id = guild_id.to_string();
+            if guild_id == 0 || raw_id != &canonical_id {
+                anyhow::bail!(
+                    "rank guild id key must use canonical non-zero decimal form: {raw_id}"
+                );
+            }
             if config.enabled {
                 configured.push((guild_id, config.clone()));
             }
@@ -801,6 +831,104 @@ tts:
         assert_eq!(config.rank.guild_config(20).unwrap().target_role_id, 300);
         assert!(config.rank.guild_config(30).is_none());
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn noncanonical_rank_guild_key_is_rejected() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "00123".into(),
+            GuildRankConfig {
+                enabled: true,
+                target_role_id: 2,
+                leaderboard_channel_id: 3,
+                stars_per_rank: 3,
+                ranks: vec!["RANK".into()],
+            },
+        );
+        assert!(config.rank.configured_guilds().is_err());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn canonical_rank_guild_key_has_consistent_direct_and_enumerated_lookup() {
+        let mut config = valid_config();
+        config.rank.enabled = true;
+        config.rank.guilds.insert(
+            "123".into(),
+            GuildRankConfig {
+                enabled: true,
+                target_role_id: 20,
+                leaderboard_channel_id: 30,
+                stars_per_rank: 3,
+                ranks: vec!["EXPLICIT".into()],
+            },
+        );
+        let configured = config.rank.configured_guilds().unwrap();
+        let direct = config.rank.guild_config(123).unwrap();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].0, 123);
+        assert_eq!(configured[0].1.target_role_id, direct.target_role_id);
+        assert_eq!(configured[0].1.ranks, direct.ranks);
+    }
+
+    #[test]
+    fn rank_config_rejects_everyone_duplicate_and_unrepresentable_names() {
+        let everyone = GuildRankConfig {
+            enabled: true,
+            target_role_id: 123,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec!["RANK".into()],
+        };
+        assert!(everyone.validate(123).is_err());
+
+        let duplicate = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec!["Bronze".into(), "BRONZE".into()],
+        };
+        assert!(duplicate.validate(123).is_err());
+
+        let whitespace = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 3,
+            ranks: vec![" BRONZE".into()],
+        };
+        assert!(whitespace.validate(123).is_err());
+
+        let too_long = GuildRankConfig {
+            enabled: true,
+            target_role_id: 2,
+            leaderboard_channel_id: 3,
+            stars_per_rank: 255,
+            ranks: vec!["X".repeat(30)],
+        };
+        assert!(too_long.validate(123).is_err());
+    }
+
+    #[test]
+    fn unknown_rank_fields_are_parse_errors() {
+        assert!(
+            serde_yaml::from_str::<GuildRankConfig>("enabled: true\ntarget_rol_id: 2\n").is_err()
+        );
+        assert!(serde_yaml::from_str::<RankConfig>("enabled: false\nguildz: {}\n").is_err());
+    }
+
+    #[test]
+    fn repository_config_example_parses_and_validates_after_required_placeholders_are_replaced() {
+        let mut config: Config = serde_yaml::from_str(include_str!("../config.example.yml"))
+            .expect("config.example.yml must remain parseable");
+        config.bot.token = "test-token".to_string();
+        config.bot.application_id = 1;
+        config
+            .validate()
+            .expect("config.example.yml must satisfy runtime validation after required placeholders are replaced");
     }
 
     #[test]
