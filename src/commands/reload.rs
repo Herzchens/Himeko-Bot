@@ -14,7 +14,7 @@ use std::sync::Arc;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
-async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
+pub(crate) async fn create_engine(config: &Config) -> Result<Arc<dyn TtsEngine>, String> {
     match config.tts.provider.as_str() {
         "gtts" => {
             tracing::info!("using gTTS engine");

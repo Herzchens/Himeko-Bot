@@ -1,3 +1,4 @@
+pub mod access;
 pub mod ask;
 pub mod autorename;
 pub mod down;
@@ -7,8 +8,10 @@ pub mod join;
 pub mod leaderboard;
 pub mod leave;
 pub mod makecustom;
+pub(crate) mod owner_config;
 pub mod ping;
 pub mod reload;
 pub mod remove;
 pub mod rescan;
 pub mod up;
+pub mod vt;

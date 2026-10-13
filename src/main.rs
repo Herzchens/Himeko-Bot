@@ -195,6 +195,8 @@ async fn main() -> anyhow::Result<()> {
         .options(poise::FrameworkOptions {
             commands: vec![
                 commands::ask::ask(),
+                commands::access::add(),
+                commands::access::remove(),
                 commands::gender::gender(),
                 commands::join::join(),
                 commands::leave::leave(),
@@ -207,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
                 commands::rescan::rescan(),
+                commands::vt::vt(),
                 commands::echo::echo(),
             ],
             event_handler: |ctx, event, framework, data| {

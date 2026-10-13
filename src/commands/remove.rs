@@ -5,7 +5,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 /// Gỡ bỏ hoàn toàn cấp bậc của thành viên (Cần quyền Admin)
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, guild_only, rename = "rank-remove")]
 pub async fn remove(
     ctx: Context<'_>,
     #[description = "Tag những người cần gỡ cấp"] users: String,

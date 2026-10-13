@@ -85,7 +85,7 @@ pub struct PermissionsConfig {
     pub allowed_users: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TtsConfig {
     #[serde(default = "default_provider")]
@@ -510,13 +510,17 @@ pub struct OpenAiTtsConfig {
 }
 
 impl Config {
-    pub fn load(path: &str) -> anyhow::Result<Self> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("failed to read config file '{path}': {e}"))?;
-        let config: Config = serde_yaml::from_str(&raw)
+    pub(crate) fn parse(raw: &str) -> anyhow::Result<Self> {
+        let config: Config = serde_yaml::from_str(raw)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn load(path: &str) -> anyhow::Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("failed to read config file '{path}': {e}"))?;
+        Self::parse(&raw)
     }
 
     pub fn validate_hot_reload_from(&self, current: &Self) -> anyhow::Result<()> {

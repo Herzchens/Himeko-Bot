@@ -32,7 +32,7 @@
 
 ## Commands
 
-Himeko currently registers 14 global slash commands.
+Himeko currently registers 17 global slash commands.
 
 | Command | Description |
 |---|---|
@@ -42,11 +42,16 @@ Himeko currently registers 14 global slash commands.
 | `/leave` | Leave the active voice session when you are allowed to control it |
 | `/gender <gender>` | Change your preferred TTS voice gender |
 | `/reload` | Atomically reload reload-safe settings from `config.yml` |
+| `/add <id\|@user>` | Add a user to `allowed_users`; bot owner only |
+| `/remove <id\|@user>` | Remove a user from `allowed_users`; bot owner only |
+| `/vt add <abbreviation> <expansion>` | Add or update a TTS abbreviation; bot owner only |
+| `/vt remove <abbreviation>` | Remove a TTS abbreviation; bot owner only |
+| `/vt list` | List active TTS abbreviations; bot owner only |
 | `/echo <message>` | Send a message as the bot; owner-only |
 | `/makecustom` | Create randomized Valorant teams and choose a map |
 | `/up @user...` | Increase rank level for one or more users; Administrator required |
 | `/down @user...` | Decrease rank level for one or more users; Administrator required |
-| `/remove @user...` | Remove rank state and restore nickname state; Administrator required |
+| `/rank-remove @user...` | Remove rank state and restore nickname state; Administrator required |
 | `/rescan` | Reconcile the current guild's member nicknames with rank storage; Administrator required |
 | `/leaderboard` | Display the current guild's rank leaderboard |
 | `/autorename on\|off` | Toggle automatic rank nickname enforcement; Administrator required |
