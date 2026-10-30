@@ -210,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::leaderboard::leaderboard(),
                 commands::autorename::autorename(),
                 commands::rescan::rescan(),
+                commands::speed::speed(),
                 commands::vt::vt(),
                 commands::echo::echo(),
             ],

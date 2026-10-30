@@ -22,6 +22,7 @@ pub struct VoiceSession {
 pub struct BotState {
     sessions: Arc<DashMap<GuildId, VoiceSession>>,
     gender: Arc<DashMap<UserId, bool>>,
+    speed: Arc<DashMap<UserId, f32>>,
     queue_locks: Arc<DashMap<GuildId, Weak<tokio::sync::Mutex<()>>>>,
     next_generation: Arc<AtomicU64>,
     default_female: Arc<AtomicBool>,
@@ -41,6 +42,7 @@ impl BotState {
         Self {
             sessions: Arc::new(DashMap::new()),
             gender: Arc::new(DashMap::new()),
+            speed: Arc::new(DashMap::new()),
             queue_locks: Arc::new(DashMap::new()),
             next_generation: Arc::new(AtomicU64::new(1)),
             default_female: Arc::new(AtomicBool::new(default_female)),
@@ -132,6 +134,18 @@ impl BotState {
         self.gender.insert(user_id, female);
     }
 
+    pub fn speech_speed(&self, user_id: UserId) -> f32 {
+        self.speed.get(&user_id).map_or(1.0, |value| *value)
+    }
+
+    pub fn set_speech_speed(&self, user_id: UserId, speed: f32) {
+        if (speed - 1.0).abs() < f32::EPSILON {
+            self.speed.remove(&user_id);
+        } else {
+            self.speed.insert(user_id, speed);
+        }
+    }
+
     pub fn set_default_female(&self, female: bool) {
         self.default_female.store(female, Ordering::SeqCst);
     }
@@ -198,6 +212,20 @@ mod tests {
         assert!(state.is_female(user));
         state.set_default_female(false);
         assert!(!state.is_female(user));
+    }
+
+    #[test]
+    fn speech_speed_defaults_to_one_and_one_clears_override() {
+        let state = BotState::default();
+        let user = UserId::new(10);
+        assert_eq!(state.speech_speed(user), 1.0);
+
+        state.set_speech_speed(user, 1.25);
+        assert_eq!(state.speech_speed(user), 1.25);
+
+        state.set_speech_speed(user, 1.0);
+        assert_eq!(state.speech_speed(user), 1.0);
+        assert!(!state.speed.contains_key(&user));
     }
 
     #[test]

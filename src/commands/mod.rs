@@ -13,5 +13,6 @@ pub mod ping;
 pub mod reload;
 pub mod remove;
 pub mod rescan;
+pub mod speed;
 pub mod up;
 pub mod vt;
