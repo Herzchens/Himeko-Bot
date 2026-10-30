@@ -76,6 +76,7 @@ pub struct Data {
     pub state: BotState,
     pub tts_scheduler: Arc<tts::scheduler::TtsScheduler>,
     pub language_detector: lingua::LanguageDetector,
+    pub multilingual_language_detector: lingua::LanguageDetector,
     pub rank_store: Arc<rank::db::RankStore>,
 }
 
@@ -328,7 +329,22 @@ async fn main() -> anyhow::Result<()> {
                     runtime: Arc::clone(&runtime_state),
                     state,
                     tts_scheduler: Arc::new(tts::scheduler::TtsScheduler::default()),
-                    language_detector: lingua::LanguageDetectorBuilder::from_languages(&[lingua::Language::Vietnamese, lingua::Language::English]).build(),
+                    language_detector: lingua::LanguageDetectorBuilder::from_languages(&[
+                        lingua::Language::Vietnamese,
+                        lingua::Language::English,
+                    ])
+                    .with_preloaded_language_models()
+                    .build(),
+                    multilingual_language_detector:
+                        lingua::LanguageDetectorBuilder::from_languages(&[
+                            lingua::Language::Vietnamese,
+                            lingua::Language::English,
+                            lingua::Language::Chinese,
+                            lingua::Language::Japanese,
+                            lingua::Language::Korean,
+                        ])
+                        .with_preloaded_language_models()
+                        .build(),
                     rank_store: Arc::clone(&rank_store_setup),
                 };
 

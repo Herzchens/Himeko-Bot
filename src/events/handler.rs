@@ -1,5 +1,6 @@
 use crate::permissions::UserLevel;
 use crate::text;
+use crate::text::language::MultilingualRouter;
 use crate::Data;
 use serenity::all::FullEvent;
 use std::sync::Arc;
@@ -95,7 +96,11 @@ async fn handle_ai_mention(
     true
 }
 
-fn detect_language(text: &str, text_to_speak: &str, detector: &lingua::LanguageDetector) -> bool {
+fn detect_legacy_english(
+    text: &str,
+    text_to_speak: &str,
+    detector: &lingua::LanguageDetector,
+) -> bool {
     let eng_exceptions = [
         "no", "ok", "yes", "hello", "hi", "bye", "wtf", "gg", "lol", "nice",
     ];
@@ -132,13 +137,7 @@ fn select_voice(config: &crate::config::Config, is_english: bool, is_female: boo
 
 fn resolve_log_voice<'a>(config: &'a crate::config::Config, voice: &'a str) -> &'a str {
     match config.tts.provider.as_str() {
-        "gtts" => {
-            if voice.starts_with("en-") || voice == "en" {
-                "en"
-            } else {
-                "vi"
-            }
-        }
+        "gtts" => voice,
         "supertonic" => {
             if let Some(ref list) = config.tts.supertonic {
                 if voice.contains('-') {
@@ -322,6 +321,11 @@ pub async fn handle_message(
         return;
     }
 
+    let handler_started = std::time::Instant::now();
+    let gateway_delay_ms = chrono::Utc::now()
+        .timestamp_millis()
+        .saturating_sub(msg.timestamp.timestamp_millis())
+        .max(0);
     let config = data.config_snapshot().await;
 
     // Intercept DMs or control channel messages from the owner
@@ -393,20 +397,51 @@ pub async fn handle_message(
     let audio_outcome: Option<Vec<Vec<u8>>> = async {
         manager.get(guild_id)?;
 
+        let filter_started = std::time::Instant::now();
         let filtered = text::prepare_for_tts(ctx, msg).await;
+        let filter_ms = filter_started.elapsed().as_millis();
         if filtered.is_empty() {
             return None;
         }
 
-        let is_english = detect_language(
-            &filtered.trim().to_lowercase(),
-            &filtered,
-            &data.language_detector,
-        );
-        let processed = runtime
-            .normalizer
-            .expand_for_language(&filtered, is_english);
-        if processed.is_empty() {
+        let is_female = data
+            .state
+            .gender_override(msg.author.id)
+            .unwrap_or(runtime.default_female);
+
+        let routing_started = std::time::Instant::now();
+        let (processed, synthesis_plan): (String, Vec<(String, String)>) =
+            if config.tts.provider == "gtts" {
+                let router = MultilingualRouter::new(
+                    &data.multilingual_language_detector,
+                    runtime.normalizer.as_ref(),
+                );
+                let segments = router.route(&filtered);
+                let processed = segments
+                    .iter()
+                    .map(|segment| segment.text.as_str())
+                    .collect::<String>();
+                let plan = segments
+                    .into_iter()
+                    .filter(|segment| !segment.text.trim().is_empty())
+                    .map(|segment| (segment.text, segment.language.gtts_code().to_string()))
+                    .collect::<Vec<_>>();
+                (processed, plan)
+            } else {
+                let is_english = detect_legacy_english(
+                    &filtered.trim().to_lowercase(),
+                    &filtered,
+                    &data.language_detector,
+                );
+                let processed = runtime
+                    .normalizer
+                    .expand_for_language(&filtered, is_english);
+                let voice = select_voice(&config, is_english, is_female);
+                (processed.clone(), vec![(processed, voice)])
+            };
+        let routing_ms = routing_started.elapsed().as_millis();
+
+        if processed.is_empty() || synthesis_plan.is_empty() {
             return None;
         }
 
@@ -425,28 +460,67 @@ pub async fn handle_message(
                 }
             };
 
-        let is_female = data
-            .state
-            .gender_override(msg.author.id)
-            .unwrap_or(runtime.default_female);
-        let voice = select_voice(&config, is_english, is_female);
-        let tts_engine = Arc::clone(&runtime.tts_engine);
-        let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
+        let planned_requests = if config.tts.provider == "gtts" {
+            match crate::tts::gtts::validate_request_budget(
+                synthesis_plan.iter().map(|(text, _)| text.as_str()),
+            ) {
+                Ok(requests) => requests,
+                Err(error) => {
+                    tracing::warn!(
+                        guild = %guild_id,
+                        user = %msg.author.id,
+                        sequence,
+                        error = %error,
+                        "gTTS message rejected by per-message request budget"
+                    );
+                    return None;
+                }
+            }
+        } else {
+            synthesis_plan.len()
+        };
 
-        let start_time = std::time::Instant::now();
-        let audio_chunks = match tts_engine.synthesize_chunks(&processed, &voice).await {
-            Ok(chunks) if !chunks.is_empty() && chunks.iter().all(|bytes| !bytes.is_empty()) => {
-                chunks
+        let mut log_voices = Vec::<String>::new();
+        for (_, voice) in &synthesis_plan {
+            let resolved = resolve_log_voice(&config, voice).to_string();
+            if log_voices.last() != Some(&resolved) {
+                log_voices.push(resolved);
             }
-            Ok(_) => {
-                tracing::warn!(
-                    guild = %guild_id,
-                    user = %msg.author.id,
-                    sequence,
-                    "TTS engine returned empty audio chunks"
-                );
-                return None;
+        }
+        let voice_summary = log_voices.join("+");
+
+        let tts_engine = Arc::clone(&runtime.tts_engine);
+        let queue_wait_started = std::time::Instant::now();
+        let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
+        let queue_wait_ms = queue_wait_started.elapsed().as_millis();
+
+        let synthesis_started = std::time::Instant::now();
+        let synthesize_all = async {
+            let audio_chunks = tts_engine.synthesize_plan(&synthesis_plan).await?;
+            if audio_chunks.is_empty() || audio_chunks.iter().any(|bytes| bytes.is_empty()) {
+                anyhow::bail!("TTS engine returned empty audio chunks");
             }
+            Ok::<Vec<Vec<u8>>, anyhow::Error>(audio_chunks)
+        };
+
+        let synthesis_result = if config.tts.provider == "gtts" {
+            match tokio::time::timeout(crate::tts::gtts::MESSAGE_SYNTHESIS_TIMEOUT, synthesize_all)
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "gTTS message synthesis exceeded {} seconds",
+                    crate::tts::gtts::MESSAGE_SYNTHESIS_TIMEOUT.as_secs()
+                )),
+            }
+        } else {
+            synthesize_all.await
+        };
+        let synthesis_ms = synthesis_started.elapsed().as_millis();
+        drop(synthesis_permit);
+
+        let audio_chunks = match synthesis_result {
+            Ok(chunks) => chunks,
             Err(error) => {
                 tracing::warn!(
                     guild = %guild_id,
@@ -458,7 +532,6 @@ pub async fn handle_message(
                 return None;
             }
         };
-        drop(synthesis_permit);
 
         if !data.state.is_current_session(guild_id, session.generation) {
             tracing::debug!(
@@ -471,7 +544,6 @@ pub async fn handle_message(
         }
 
         let total_audio_bytes: usize = audio_chunks.iter().map(Vec::len).sum();
-        let log_voice = resolve_log_voice(&config, &voice);
         tracing::info!(
             guild = %guild_id,
             user = %msg.author.id,
@@ -479,10 +551,16 @@ pub async fn handle_message(
             chars = processed.chars().count(),
             graphemes = processed_graphemes,
             audio_chunks = audio_chunks.len(),
+            planned_requests,
             sequence,
-            voice = %log_voice,
+            voice = %voice_summary,
             audio_bytes = total_audio_bytes,
-            elapsed_ms = start_time.elapsed().as_millis(),
+            filter_ms,
+            routing_ms,
+            queue_wait_ms,
+            synthesis_ms,
+            gateway_delay_ms,
+            handler_elapsed_ms = handler_started.elapsed().as_millis(),
             "TTS synthesized"
         );
         Some(audio_chunks)
@@ -499,10 +577,12 @@ pub async fn handle_message(
             generation = session.generation,
             sequence = ready.sequence,
             chunks = ready.audio_chunks.len(),
+            ordering_wait_ms = ready.ordering_wait.as_millis(),
+            emitted_by_own_handler = ready.sequence == sequence,
             "emitting synthesized TTS in admission order"
         );
 
-        for audio_bytes in ready.audio_chunks {
+        for (chunk_index, audio_bytes) in ready.audio_chunks.into_iter().enumerate() {
             let Some(playback_permit) = emission.acquire_playback().await else {
                 return;
             };
@@ -519,7 +599,20 @@ pub async fn handle_message(
             let track =
                 crate::tts::scheduler::track_with_playback_permit(audio_bytes, playback_permit);
             let mut handler = handler_lock.lock().await;
+            let queued_tracks_before = handler.queue().len();
+            let enqueue_started = std::time::Instant::now();
             handler.enqueue(track).await;
+
+            if chunk_index == 0 {
+                tracing::debug!(
+                    guild = %guild_id,
+                    generation = session.generation,
+                    sequence = ready.sequence,
+                    queued_tracks_before,
+                    enqueue_ms = enqueue_started.elapsed().as_millis(),
+                    "first TTS track enqueued"
+                );
+            }
         }
     }
 }

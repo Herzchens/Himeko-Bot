@@ -129,17 +129,23 @@ pub async fn reload(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    // Build every fallible replacement before publishing any new runtime state.
-    let tts_engine = match create_engine(&new_config).await {
-        Ok(engine) => engine,
-        Err(error) => {
-            ctx.send(
-                CreateReply::default()
-                    .content(format!("❌ {error}"))
-                    .ephemeral(true),
-            )
-            .await?;
-            return Ok(());
+    // Preserve the current engine when TTS settings are unchanged. Besides avoiding
+    // unnecessary local-provider readiness work, this keeps gTTS HTTP/TLS connections warm.
+    let tts_engine = if new_config.tts == current_config.tts {
+        tracing::debug!("reusing existing TTS engine across hot reload");
+        Arc::clone(&current_runtime.tts_engine)
+    } else {
+        match create_engine(&new_config).await {
+            Ok(engine) => engine,
+            Err(error) => {
+                ctx.send(
+                    CreateReply::default()
+                        .content(format!("❌ {error}"))
+                        .ephemeral(true),
+                )
+                .await?;
+                return Ok(());
+            }
         }
     };
     let normalizer = Arc::new(Normalizer::from_config(&new_config.abbreviations));

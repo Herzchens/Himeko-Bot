@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub(crate) const MULTILINGUAL_ROUTING_BOUNDARY: char = '\u{001f}';
+
 pub struct Normalizer {
     map: HashMap<String, String>,
     punctuation_keys: Vec<String>,
@@ -33,6 +35,26 @@ impl Normalizer {
             return processed.split_whitespace().collect::<Vec<_>>().join(" ");
         }
         self.expand_words(&processed)
+    }
+
+    pub fn prepare_for_multilingual_routing(&self, text: &str) -> String {
+        let boundary = MULTILINGUAL_ROUTING_BOUNDARY;
+        let mut processed = text.replace(boundary, " ");
+        for key in &self.punctuation_keys {
+            if let Some(value) = self.map.get(key) {
+                processed = processed.replace(key, &format!(" {boundary}{value}{boundary} "));
+            }
+        }
+        processed.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    pub fn lexical_expansion(&self, token: &str) -> Option<String> {
+        let key = token.to_lowercase();
+        let expansion = self.map.get(&key)?;
+        if !key.chars().any(char::is_alphanumeric) {
+            return None;
+        }
+        Some(preserve_capitalization(token, expansion))
     }
 
     fn expand_punctuation(&self, text: &str) -> String {

@@ -27,6 +27,15 @@ pub trait TtsEngine: Send + Sync {
     async fn synthesize_chunks(&self, text: &str, voice: &str) -> anyhow::Result<Vec<Vec<u8>>> {
         Ok(vec![self.synthesize(text, voice).await?])
     }
+
+    async fn synthesize_plan(&self, plan: &[(String, String)]) -> anyhow::Result<Vec<Vec<u8>>> {
+        let mut audio_chunks = Vec::new();
+        for (text, voice) in plan {
+            let chunks = self.synthesize_chunks(text, voice).await?;
+            audio_chunks.extend(chunks);
+        }
+        Ok(audio_chunks)
+    }
 }
 
 #[cfg(test)]

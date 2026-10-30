@@ -18,7 +18,7 @@
 - **Bounded TTS scheduling** with ordered playback and process-wide/per-guild concurrency limits
 - **Automatic local TTS server lifecycle** for supported loopback Supertonic/VieNeu configurations
 - **Voice auto-rejoin** with bounded retry/backoff after unexpected disconnects
-- **Vietnamese/English auto-detection** for TTS voice selection
+- **Dynamic multilingual gTTS routing** across Vietnamese, English, Mandarin Chinese, Japanese, and Korean, including mixed-language messages
 - **Emoji and text normalization** for cleaner spoken output
 - **Per-user voice gender preference**
 - **AI chat integration** through Gemini or Groq via `/ask` and direct bot mentions
@@ -219,7 +219,7 @@ Notes:
 | `mode` | `fast` on a supported GPU | Use CPU `turbo` when GPU acceleration is unavailable |
 | `temperature` | `0.3` | Stable default for supported VieNeu presets |
 
-Runtime scheduling is bounded to avoid unbounded synthesis fan-out: up to **3 concurrent synthesis jobs per guild** and **12 process-wide**, while preserving admission order for playback.
+Runtime scheduling is bounded to avoid unbounded synthesis fan-out: up to **3 concurrent synthesis jobs per guild** and **12 process-wide**, while preserving admission order for playback. gTTS additionally enforces a per-message HTTP-request budget and a total synthesis deadline so mixed-language segmentation cannot monopolize a synthesis slot indefinitely.
 
 ---
 

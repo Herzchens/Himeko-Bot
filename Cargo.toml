@@ -20,6 +20,7 @@ msedge-tts = { path = "vendor/msedge-tts", default-features = false, features = 
 
 # Async
 tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 
 # Config
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +33,7 @@ dashmap = "6"
 # Text processing
 regex = "1.11"
 unicode-segmentation = "=1.13.2"
+unicode-script = "0.5.8"
 
 # Logging
 tracing            = "0.1"
@@ -42,10 +44,10 @@ async-trait = "0.1"
 serde_yaml = "0.9.34"
 atomic-write-file = "0.3.0"
 serde_json = "1.0.149"
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "query", "rustls-no-provider"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "query", "http2", "rustls-no-provider"] }
 urlencoding = "2.1.3"
 rustls = { version = "0.23", features = ["ring"] }
-lingua = { version = "1.8.0", default-features = false, features = ["english", "vietnamese"] }
+lingua = { version = "1.8.0", default-features = false, features = ["chinese", "english", "japanese", "korean", "vietnamese"] }
 rand = "0.9.4"
 chrono = "0.4"
 chrono-tz = "0.10"

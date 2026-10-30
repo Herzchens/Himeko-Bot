@@ -64,6 +64,7 @@ struct ReadyQueue {
 
 struct ReadyJob {
     audio_chunks: Option<Vec<Vec<u8>>>,
+    completed_at: std::time::Instant,
     _pending: OwnedSemaphorePermit,
 }
 
@@ -86,6 +87,7 @@ pub struct EmissionLease {
 pub struct ReadyAudio {
     pub sequence: u64,
     pub audio_chunks: Vec<Vec<u8>>,
+    pub ordering_wait: Duration,
     _pending: OwnedSemaphorePermit,
 }
 
@@ -269,6 +271,7 @@ impl TtsTicket {
                 self.sequence,
                 ReadyJob {
                     audio_chunks,
+                    completed_at: std::time::Instant::now(),
                     _pending: pending,
                 },
             );
@@ -301,6 +304,7 @@ impl EmissionLease {
                 return Some(ReadyAudio {
                     sequence,
                     audio_chunks,
+                    ordering_wait: job.completed_at.elapsed(),
                     _pending: job._pending,
                 });
             }

@@ -1,4 +1,5 @@
 pub mod filter;
+pub mod language;
 pub mod normalizer;
 
 use filter::MessageFilter;

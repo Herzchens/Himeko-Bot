@@ -36,7 +36,7 @@ pub async fn gender(
         drop(config);
         ctx.send(
             CreateReply::default()
-                .content("ℹ️ gTTS không hỗ trợ lựa chọn giọng nam/nữ. Bot sẽ chỉ chọn ngôn ngữ vi/en cho provider này.")
+                .content("ℹ️ gTTS không hỗ trợ lựa chọn giọng nam/nữ. Himeko sẽ tự route ngôn ngữ động theo từng đoạn (vi/en/zh/ja/ko).")
                 .ephemeral(true),
         )
         .await?;
