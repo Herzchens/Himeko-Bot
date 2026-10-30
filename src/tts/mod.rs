@@ -19,6 +19,7 @@ pub fn validate_admission_limit(text: &str, max_chars: usize) -> anyhow::Result<
     Ok(graphemes)
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait TtsEngine: Send + Sync {
     async fn synthesize(&self, text: &str, voice: &str) -> anyhow::Result<Vec<u8>>;

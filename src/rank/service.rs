@@ -23,6 +23,7 @@ impl MemberSnapshot {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait RankRemote: Send + Sync {
     async fn fetch_member(&self, guild_id: u64, user_id: u64) -> anyhow::Result<MemberSnapshot>;

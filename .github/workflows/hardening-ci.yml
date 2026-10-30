@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/runtime-multiguild-hardening
+      - "feature/**"
   workflow_dispatch:
 
 permissions:
