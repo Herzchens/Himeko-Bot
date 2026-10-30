@@ -199,6 +199,8 @@ async fn main() -> anyhow::Result<()> {
                 commands::access::add(),
                 commands::access::remove(),
                 commands::gender::gender(),
+                commands::guild::leaveguild(),
+                commands::info::info(),
                 commands::join::join(),
                 commands::leave::leave(),
                 commands::ping::ping(),

@@ -4,6 +4,8 @@ pub mod autorename;
 pub mod down;
 pub mod echo;
 pub mod gender;
+pub mod guild;
+pub mod info;
 pub mod join;
 pub mod leaderboard;
 pub mod leave;
