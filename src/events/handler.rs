@@ -394,7 +394,7 @@ pub async fn handle_message(
         }
     };
 
-    let audio_outcome: Option<Vec<Vec<u8>>> = async {
+    let playback_outcome: Option<crate::tts::scheduler::ReadyPayload> = async {
         manager.get(guild_id)?;
 
         let filter_started = std::time::Instant::now();
@@ -408,6 +408,7 @@ pub async fn handle_message(
             .state
             .gender_override(msg.author.id)
             .unwrap_or(runtime.default_female);
+        let speech_speed = data.state.speech_speed(msg.author.id);
 
         let routing_started = std::time::Instant::now();
         let (processed, synthesis_plan): (String, Vec<(String, String)>) =
@@ -493,8 +494,70 @@ pub async fn handle_message(
         let queue_wait_started = std::time::Instant::now();
         let synthesis_permit = ticket.acquire_synthesis(&data.tts_scheduler).await?;
         let queue_wait_ms = queue_wait_started.elapsed().as_millis();
-
         let synthesis_started = std::time::Instant::now();
+
+        if config.tts.provider == "gtts" {
+            let stream = match crate::tts::playback::start_streaming_plan(
+                tts_engine,
+                synthesis_plan,
+                speech_speed,
+                crate::tts::gtts::MESSAGE_SYNTHESIS_TIMEOUT,
+            )
+            .await
+            {
+                Ok(stream) => stream,
+                Err(error) => {
+                    drop(synthesis_permit);
+                    tracing::warn!(
+                        guild = %guild_id,
+                        user = %msg.author.id,
+                        sequence,
+                        error = %error,
+                        "TTS streaming startup failed"
+                    );
+                    return None;
+                }
+            };
+            let first_segment_ms = synthesis_started.elapsed().as_millis();
+            // The gTTS engine has its own global HTTP request gate. Release the
+            // scheduler startup permit once the first playable segment is ready
+            // so a later out-of-order message cannot deadlock an earlier ticket.
+            drop(synthesis_permit);
+
+            if !data.state.is_current_session(guild_id, session.generation) {
+                tracing::debug!(
+                    guild = %guild_id,
+                    generation = session.generation,
+                    sequence,
+                    "discarding TTS stream for a stale voice session"
+                );
+                return None;
+            }
+
+            tracing::info!(
+                guild = %guild_id,
+                user = %msg.author.id,
+                provider = %config.tts.provider,
+                chars = processed.chars().count(),
+                graphemes = processed_graphemes,
+                planned_requests,
+                sequence,
+                voice = %voice_summary,
+                first_audio_bytes = stream.first_audio_bytes,
+                pcm_sample_rate = stream.sample_rate,
+                pcm_channels = stream.channels,
+                speech_speed,
+                filter_ms,
+                routing_ms,
+                queue_wait_ms,
+                first_segment_ms,
+                gateway_delay_ms,
+                handler_elapsed_ms = handler_started.elapsed().as_millis(),
+                "TTS stream primed"
+            );
+            return Some(crate::tts::scheduler::ReadyPayload::Stream(stream.input));
+        }
+
         let synthesize_all = async {
             let audio_chunks = tts_engine.synthesize_plan(&synthesis_plan).await?;
             if audio_chunks.is_empty() || audio_chunks.iter().any(|bytes| bytes.is_empty()) {
@@ -502,20 +565,7 @@ pub async fn handle_message(
             }
             Ok::<Vec<Vec<u8>>, anyhow::Error>(audio_chunks)
         };
-
-        let synthesis_result = if config.tts.provider == "gtts" {
-            match tokio::time::timeout(crate::tts::gtts::MESSAGE_SYNTHESIS_TIMEOUT, synthesize_all)
-                .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(anyhow::anyhow!(
-                    "gTTS message synthesis exceeded {} seconds",
-                    crate::tts::gtts::MESSAGE_SYNTHESIS_TIMEOUT.as_secs()
-                )),
-            }
-        } else {
-            synthesize_all.await
-        };
+        let synthesis_result = synthesize_all.await;
         let synthesis_ms = synthesis_started.elapsed().as_millis();
         drop(synthesis_permit);
 
@@ -554,6 +604,7 @@ pub async fn handle_message(
             planned_requests,
             sequence,
             voice = %voice_summary,
+            speech_speed,
             audio_bytes = total_audio_bytes,
             filter_ms,
             routing_ms,
@@ -563,47 +614,92 @@ pub async fn handle_message(
             handler_elapsed_ms = handler_started.elapsed().as_millis(),
             "TTS synthesized"
         );
-        Some(audio_chunks)
+        Some(crate::tts::scheduler::ReadyPayload::Buffered(audio_chunks))
     }
     .await;
 
-    let Some(mut emission) = ticket.complete(audio_outcome).await else {
+    let Some(mut emission) = ticket.complete(playback_outcome).await else {
         return;
     };
 
     while let Some(ready) = emission.next_ready().await {
-        tracing::debug!(
-            guild = %guild_id,
-            generation = session.generation,
-            sequence = ready.sequence,
-            chunks = ready.audio_chunks.len(),
-            ordering_wait_ms = ready.ordering_wait.as_millis(),
-            emitted_by_own_handler = ready.sequence == sequence,
-            "emitting synthesized TTS in admission order"
-        );
+        let emitted_by_own_handler = ready.sequence == sequence;
+        match ready.payload {
+            crate::tts::scheduler::ReadyPayload::Buffered(audio_chunks) => {
+                tracing::debug!(
+                    guild = %guild_id,
+                    generation = session.generation,
+                    sequence = ready.sequence,
+                    chunks = audio_chunks.len(),
+                    ordering_wait_ms = ready.ordering_wait.as_millis(),
+                    emitted_by_own_handler,
+                    "emitting synthesized TTS in admission order"
+                );
 
-        for (chunk_index, audio_bytes) in ready.audio_chunks.into_iter().enumerate() {
-            let Some(playback_permit) = emission.acquire_playback().await else {
-                return;
-            };
+                for (chunk_index, audio_bytes) in audio_chunks.into_iter().enumerate() {
+                    let Some(playback_permit) = emission.acquire_playback().await else {
+                        return;
+                    };
 
-            let queue_lock = data.state.get_queue_lock(guild_id);
-            let _operation = queue_lock.lock().await;
-            if !data.state.is_current_session(guild_id, session.generation) {
-                return;
+                    let queue_lock = data.state.get_queue_lock(guild_id);
+                    let _operation = queue_lock.lock().await;
+                    if !data.state.is_current_session(guild_id, session.generation) {
+                        return;
+                    }
+
+                    let Some(handler_lock) = manager.get(guild_id) else {
+                        return;
+                    };
+                    let track = crate::tts::scheduler::track_with_playback_permit(
+                        audio_bytes,
+                        playback_permit,
+                    );
+                    let mut handler = handler_lock.lock().await;
+                    let queued_tracks_before = handler.queue().len();
+                    let enqueue_started = std::time::Instant::now();
+                    handler.enqueue(track).await;
+
+                    if chunk_index == 0 {
+                        tracing::debug!(
+                            guild = %guild_id,
+                            generation = session.generation,
+                            sequence = ready.sequence,
+                            queued_tracks_before,
+                            enqueue_ms = enqueue_started.elapsed().as_millis(),
+                            "first TTS track enqueued"
+                        );
+                    }
+                }
             }
+            crate::tts::scheduler::ReadyPayload::Stream(input) => {
+                tracing::debug!(
+                    guild = %guild_id,
+                    generation = session.generation,
+                    sequence = ready.sequence,
+                    chunks = 1,
+                    ordering_wait_ms = ready.ordering_wait.as_millis(),
+                    emitted_by_own_handler,
+                    "emitting streaming TTS in admission order"
+                );
 
-            let Some(handler_lock) = manager.get(guild_id) else {
-                return;
-            };
-            let track =
-                crate::tts::scheduler::track_with_playback_permit(audio_bytes, playback_permit);
-            let mut handler = handler_lock.lock().await;
-            let queued_tracks_before = handler.queue().len();
-            let enqueue_started = std::time::Instant::now();
-            handler.enqueue(track).await;
+                let Some(playback_permit) = emission.acquire_playback().await else {
+                    return;
+                };
+                let queue_lock = data.state.get_queue_lock(guild_id);
+                let _operation = queue_lock.lock().await;
+                if !data.state.is_current_session(guild_id, session.generation) {
+                    return;
+                }
 
-            if chunk_index == 0 {
+                let Some(handler_lock) = manager.get(guild_id) else {
+                    return;
+                };
+                let track =
+                    crate::tts::scheduler::track_with_input_playback_permit(input, playback_permit);
+                let mut handler = handler_lock.lock().await;
+                let queued_tracks_before = handler.queue().len();
+                let enqueue_started = std::time::Instant::now();
+                handler.enqueue(track).await;
                 tracing::debug!(
                     guild = %guild_id,
                     generation = session.generation,

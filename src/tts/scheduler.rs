@@ -62,8 +62,13 @@ struct ReadyQueue {
     jobs: BTreeMap<u64, ReadyJob>,
 }
 
+pub enum ReadyPayload {
+    Buffered(Vec<Vec<u8>>),
+    Stream(songbird::input::Input),
+}
+
 struct ReadyJob {
-    audio_chunks: Option<Vec<Vec<u8>>>,
+    payload: Option<ReadyPayload>,
     completed_at: std::time::Instant,
     _pending: OwnedSemaphorePermit,
 }
@@ -86,7 +91,7 @@ pub struct EmissionLease {
 
 pub struct ReadyAudio {
     pub sequence: u64,
-    pub audio_chunks: Vec<Vec<u8>>,
+    pub payload: ReadyPayload,
     pub ordering_wait: Duration,
     _pending: OwnedSemaphorePermit,
 }
@@ -122,7 +127,13 @@ pub fn track_with_playback_permit(
     audio_bytes: Vec<u8>,
     permit: OwnedSemaphorePermit,
 ) -> songbird::tracks::Track {
-    let input = songbird::input::Input::from(audio_bytes);
+    track_with_input_playback_permit(songbird::input::Input::from(audio_bytes), permit)
+}
+
+pub fn track_with_input_playback_permit(
+    input: songbird::input::Input,
+    permit: OwnedSemaphorePermit,
+) -> songbird::tracks::Track {
     let mut track = songbird::tracks::Track::from(input);
     track.events.add_event(
         songbird::events::EventData::new(
@@ -259,7 +270,7 @@ impl TtsTicket {
         })
     }
 
-    pub async fn complete(mut self, audio_chunks: Option<Vec<Vec<u8>>>) -> Option<EmissionLease> {
+    pub async fn complete(mut self, payload: Option<ReadyPayload>) -> Option<EmissionLease> {
         let pending = self.pending.take()?;
         if self.lane.cancelled.load(Ordering::Acquire) {
             return None;
@@ -270,7 +281,7 @@ impl TtsTicket {
             ready.jobs.insert(
                 self.sequence,
                 ReadyJob {
-                    audio_chunks,
+                    payload,
                     completed_at: std::time::Instant::now(),
                     _pending: pending,
                 },
@@ -300,10 +311,10 @@ impl EmissionLease {
             ready.next_emit = ready.next_emit.saturating_add(1);
             drop(ready);
 
-            if let Some(audio_chunks) = job.audio_chunks {
+            if let Some(payload) = job.payload {
                 return Some(ReadyAudio {
                     sequence,
-                    audio_chunks,
+                    payload,
                     ordering_wait: job.completed_at.elapsed(),
                     _pending: job._pending,
                 });
@@ -387,17 +398,29 @@ mod tests {
         let first = scheduler.try_admit(guild, 1).unwrap();
         let second = scheduler.try_admit(guild, 1).unwrap();
 
-        let mut late = second.complete(Some(vec![vec![2]])).await.unwrap();
+        let mut late = second
+            .complete(Some(ReadyPayload::Buffered(vec![vec![2]])))
+            .await
+            .unwrap();
         assert!(late.next_ready().await.is_none());
         drop(late);
 
-        let mut early = first.complete(Some(vec![vec![1]])).await.unwrap();
+        let mut early = first
+            .complete(Some(ReadyPayload::Buffered(vec![vec![1]])))
+            .await
+            .unwrap();
         let first_audio = early.next_ready().await.unwrap();
         let second_audio = early.next_ready().await.unwrap();
         assert_eq!(first_audio.sequence, 0);
-        assert_eq!(first_audio.audio_chunks, vec![vec![1]]);
+        assert!(matches!(
+            first_audio.payload,
+            ReadyPayload::Buffered(ref chunks) if chunks == &vec![vec![1]]
+        ));
         assert_eq!(second_audio.sequence, 1);
-        assert_eq!(second_audio.audio_chunks, vec![vec![2]]);
+        assert!(matches!(
+            second_audio.payload,
+            ReadyPayload::Buffered(ref chunks) if chunks == &vec![vec![2]]
+        ));
         assert!(early.next_ready().await.is_none());
     }
 
@@ -408,21 +431,30 @@ mod tests {
         let first = scheduler.try_admit(guild, 1).unwrap();
         let second = scheduler.try_admit(guild, 1).unwrap();
 
-        let mut later = second.complete(Some(vec![vec![9]])).await.unwrap();
+        let mut later = second
+            .complete(Some(ReadyPayload::Buffered(vec![vec![9]])))
+            .await
+            .unwrap();
         assert!(later.next_ready().await.is_none());
         drop(later);
 
         let mut failed = first.complete(None).await.unwrap();
         let ready = failed.next_ready().await.unwrap();
         assert_eq!(ready.sequence, 1);
-        assert_eq!(ready.audio_chunks, vec![vec![9]]);
+        assert!(matches!(
+            ready.payload,
+            ReadyPayload::Buffered(ref chunks) if chunks == &vec![vec![9]]
+        ));
     }
 
     #[tokio::test]
     async fn playback_permits_hard_bound_queued_tracks() {
         let scheduler = TtsScheduler::with_limits(limits(4, 2, 2, 1));
         let ticket = scheduler.try_admit(GuildId::new(1), 1).unwrap();
-        let mut lease = ticket.complete(Some(vec![vec![1]])).await.unwrap();
+        let mut lease = ticket
+            .complete(Some(ReadyPayload::Buffered(vec![vec![1]])))
+            .await
+            .unwrap();
         let _ready = lease.next_ready().await.unwrap();
         let first = lease.acquire_playback().await.unwrap();
         assert!(

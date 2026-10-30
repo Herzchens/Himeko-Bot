@@ -3,6 +3,7 @@ pub mod engine;
 pub mod gtts;
 pub mod local_process;
 pub mod openai;
+pub mod playback;
 pub mod scheduler;
 pub mod supertonic;
 pub mod vieneu;
@@ -35,6 +36,29 @@ pub trait TtsEngine: Send + Sync {
             audio_chunks.extend(chunks);
         }
         Ok(audio_chunks)
+    }
+
+    async fn synthesize_plan_stream(
+        &self,
+        plan: Vec<(String, String)>,
+        sender: tokio::sync::mpsc::Sender<anyhow::Result<Vec<u8>>>,
+    ) -> anyhow::Result<()> {
+        for (text, voice) in plan {
+            match self.synthesize_chunks(&text, &voice).await {
+                Ok(chunks) => {
+                    for chunk in chunks {
+                        if sender.send(Ok(chunk)).await.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error)).await;
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 }
 

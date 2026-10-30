@@ -6,7 +6,7 @@ use reqwest::{
     Client,
 };
 use std::{sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc, Semaphore};
 
 const MAX_ATTEMPTS: usize = 3;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -239,6 +239,43 @@ impl TtsEngine for GttsEngine {
         .buffered(MAX_PARALLEL_REQUESTS_PER_MESSAGE)
         .try_collect()
         .await
+    }
+
+    async fn synthesize_plan_stream(
+        &self,
+        plan: Vec<(String, String)>,
+        sender: mpsc::Sender<anyhow::Result<Vec<u8>>>,
+    ) -> anyhow::Result<()> {
+        let requests = plan
+            .into_iter()
+            .flat_map(|(text, voice)| {
+                split_strict_chars(&text, GTTS_MAX_CHARS)
+                    .into_iter()
+                    .map(|chunk| (chunk, voice.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let total = requests.len();
+        let mut pending = stream::iter(requests.into_iter().enumerate().map(
+            |(index, (text, voice))| async move {
+                self.synthesize_one(&text, &voice, index, total)
+                    .await
+                    .map_err(|error| anyhow::anyhow!("voice {voice}: {error}"))
+            },
+        ))
+        .buffered(MAX_PARALLEL_REQUESTS_PER_MESSAGE);
+
+        while let Some(result) = pending.next().await {
+            let failed = result.is_err();
+            if sender.send(result).await.is_err() {
+                return Ok(());
+            }
+            if failed {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 }
 

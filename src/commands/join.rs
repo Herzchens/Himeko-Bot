@@ -54,6 +54,11 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
+    // Voice connection and the per-guild operation lock may exceed Discord's
+    // initial interaction response window. Acknowledge the slash command first
+    // so subsequent ctx.send() calls are follow-ups instead of an expired initial response.
+    ctx.defer_ephemeral().await?;
+
     let state = &ctx.data().state;
     let queue_lock = state.get_queue_lock(guild_id);
     let _operation = queue_lock.lock().await;
